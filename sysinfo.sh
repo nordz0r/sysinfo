@@ -4,7 +4,8 @@
 #
 # Copyright (C) 2019 NorD
 #
-# usage: 
+# usage (curl): curl -Lso- https://raw.githubusercontent.com/nordz0r/sysinfo/master/sysinfo.sh | bash
+# usage (wget): wget -qO- https://raw.githubusercontent.com/nordz0r/sysinfo/master/sysinfo.sh | bash
 ##########################
 
 
