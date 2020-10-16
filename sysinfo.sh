@@ -46,6 +46,7 @@ calc_disk() {
     echo ${total_size}
 }
 
+hostname=$( hostname --fqdn )
 cname=$( awk -F: '/model name/ {name=$2} END {print name}' /proc/cpuinfo | sed 's/^[ \t]*//;s/[ \t]*$//' )
 cores=$( awk -F: '/model name/ {core++} END {print core}' /proc/cpuinfo )
 freq=$( awk -F'[ :]' '/cpu MHz/ {print $4;exit}' /proc/cpuinfo )
@@ -69,6 +70,7 @@ ips=$( ip addr show | awk '$1 == "inet" {gsub(/\/.*$/, "", $2); print $2}' | egr
 
 # clear
 next
+echo -e "Hostname             : ${BLUE}$hostname${PLAIN}"
 echo -e "CPU model            : ${BLUE}$cname${PLAIN}"
 echo -e "Number of cores      : ${BLUE}$cores${PLAIN}"
 echo -e "CPU frequency        : ${BLUE}$freq MHz${PLAIN}"
