@@ -83,6 +83,6 @@ echo -e "OS                   : ${BLUE}$opsy${PLAIN}"
 echo -e "Arch                 : ${BLUE}$arch ($lbit Bit)${PLAIN}"
 echo -e "Kernel               : ${BLUE}$kern${PLAIN}"
 echo -e "IP(s)                : ${BLUE}$ips${PLAIN}"
-echo -e "Last login           : ${BLUE}$last_logon${PLAIN}"
+#echo -e "Last login           : ${BLUE}$last_logon${PLAIN}"
 next
 
