@@ -46,7 +46,7 @@ calc_disk() {
     echo ${total_size}
 }
 
-hostname=$( hostname --fqdn )
+hostname=$( cat /etc/hostname )
 cname=$( awk -F: '/model name/ {name=$2} END {print name}' /proc/cpuinfo | sed 's/^[ \t]*//;s/[ \t]*$//' )
 cores=$( awk -F: '/model name/ {core++} END {print core}' /proc/cpuinfo )
 freq=$( awk -F'[ :]' '/cpu MHz/ {print $4;exit}' /proc/cpuinfo )
