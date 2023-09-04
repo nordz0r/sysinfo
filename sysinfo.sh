@@ -69,9 +69,8 @@ last_logon=$( who | grep `whoami` | head -1 | awk '{print $3,$4,$5}' )
 ips=$( ip addr show | awk '$1 == "inet" {gsub(/\/.*$/, "", $2); print $2}' | egrep -v "127.0.0.1" | xargs )
 
 # clear
-echo ${PLAIN}
 next
-echo -e "Hostname             : ${BLUE}$hostname${PLAIN}"
+echo -e "${PLAIN}Hostname             : ${BLUE}$hostname${PLAIN}"
 echo -e "CPU model            : ${BLUE}$cname${PLAIN}"
 echo -e "Number of cores      : ${BLUE}$cores${PLAIN}"
 echo -e "CPU frequency        : ${BLUE}$freq MHz${PLAIN}"
