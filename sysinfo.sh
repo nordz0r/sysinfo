@@ -9,10 +9,11 @@
 ##########################
 
 
-if  [ ! -e '/usr/bin/wget' ]; then
-    echo "Error: wget command not found. You must be install wget command at first."
+if [ ! -e '/usr/bin/curl' ] && [ ! -e '/usr/bin/wget' ]; then
+    echo "Error: Neither curl nor wget command was found. You must install curl or wget at first."
     exit 1
 fi
+
 
 # Colors
 RED='\033[0;31m'
