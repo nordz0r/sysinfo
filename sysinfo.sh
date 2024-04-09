@@ -66,7 +66,7 @@ disk_size2=($( LANG=C df -hPl | grep -wvE '\-|none|tmpfs|devtmpfs|by-uuid|chroot
 disk_total_size=$( calc_disk "${disk_size1[@]}" )
 disk_used_size=$( calc_disk "${disk_size2[@]}" )
 last_logon=$( who | grep `whoami` | head -1 | awk '{print $3,$4,$5}' )
-ips=$( /usr/sbin/ip addr show | awk '$1 == "inet" {gsub(/\/.*$/, "", $2); print $2}' | egrep -v "127.0.0.1" | xargs )
+ips=$( $( which ip ) addr show | awk '$1 == "inet" {gsub(/\/.*$/, "", $2); print $2}' | egrep -v "127.0.0.1" | xargs )
 
 # clear
 next
