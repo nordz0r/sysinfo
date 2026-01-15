@@ -64,13 +64,14 @@ else
     hostname=$( hostname 2>/dev/null || uname -n )
 fi
 
-cname=$( awk -F: '/model name/ {name=$2} END {print name}' /proc/cpuinfo | sed 's/^[ \t]*//;s/[ \t]*$//' )
-cores=$( awk -F: '/model name/ {core++} END {print core}' /proc/cpuinfo )
-freq=$( awk -F'[ :]' '/cpu MHz/ {print $4;exit}' /proc/cpuinfo )
-tram=$( LANG=C  free -m | awk '/Mem/ {print $2}' )
-uram=$( LANG=C free -m | awk '/Mem/ {print $3}' )
-swap=$( LANG=C free -m | awk '/Swap/ {print $2}' )
-uswap=$( LANG=C free -m | awk '/Swap/ {print $3}' )
+cname=$( awk -F: '/model name|Processor/ {name=$2} END {print name}' /proc/cpuinfo | sed 's/^[ \t]*//;s/[ \t]*$//' )
+cores=$( awk -F: '/processor/ {core++} END {print core}' /proc/cpuinfo )
+freq=$( awk -F'[ :]' '/cpu MHz|CPU MHz/ {print $4;exit}' /proc/cpuinfo )
+# Use free without -m for BusyBox compatibility, convert from KiB to MiB
+tram=$( LANG=C free | awk '/Mem:/ {print int($2/1024)}' )
+uram=$( LANG=C free | awk '/Mem:/ {print int($3/1024)}' )
+swap=$( LANG=C free | awk '/Swap:/ {print int($2/1024)}' )
+uswap=$( LANG=C free | awk '/Swap:/ {print int($3/1024)}' )
 up=$( awk '{a=$1/86400;b=($1%86400)/3600;c=($1%3600)/60} {printf("%d days, %d hour %d min\n",a,b,c)}' /proc/uptime )
 
 # Get load average with fallback
