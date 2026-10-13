@@ -111,11 +111,16 @@ IP         : ens160 10.0.0.118
 - RAM and swap, then (after a blank line) up to four local filesystems (root first, then the fullest).
   Container/kubelet bind mounts, `/run`, WSL helper mounts and read-only
   images are skipped. `--details` shows every filesystem.
-- IP: up to three `interface address` pairs, default route first.
+- Separators follow the longest line, capped by the terminal width (`COLUMNS`/`tput cols`).
+- Filesystems with identical size and usage (e.g. `/` and `/overlay`) are shown once.
+- IP: up to three `interface address` pairs, default route first (all on OpenWrt);
+  one interface per line when they do not fit.
   Docker and overlay interfaces (`docker*`, `br-<hex>`, `veth*`, `flannel*`,
   `cni*`, `cali*`, `vxlan*`, ...) are hidden unless `--all-interfaces`.
 
-Bars use full blocks `█` with a dim `░` remainder when the locale is UTF-8 (no
+Bars use full blocks `█` with a dim `░` remainder when the locale is UTF-8, or when
+no locale is set and `TERM` is a common UTF-8 terminal (OpenWrt); `SYSINFO_UTF8=0|1`
+overrides (no
 fractional blocks: they render unevenly in many fonts) and fall back to ASCII
 (`=`/`-`) otherwise. Colors: green below **80%**, yellow from 80%, red with `!`
 from **95%**.
@@ -183,7 +188,8 @@ MIT, see [LICENSE](LICENSE).
 BusyBox `ash`/`awk`/`df`/`ip` are enough; nothing to install. On OpenWrt the
 overlay upper dir (`/overlay`, same space as `/`) is hidden, `/tmp` (tmpfs) is
 shown, ARM CPUs are named from `CPU part` (e.g. `ARM Cortex-A53`) plus the board
-from `/tmp/sysinfo/model`.
+from `/tmp/sysinfo/model`; the SoC comes from the device tree, e.g.
+`2 × MediaTek MT7981 (Cudy WBR3000UAX v1)`.
 
 Offline-safe autostart for interactive logins only (keeps `scp`/`ssh host cmd` clean):
 

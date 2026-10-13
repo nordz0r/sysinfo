@@ -77,7 +77,7 @@ class Fixture:
         self.common.write_text(source)
         self.compat = self.root / "sysinfo_v2.sh"
         self.compat.write_text(source)
-        self.env = {**{k: v for k, v in os.environ.items() if k != "LANG" and not k.startswith("LC_")}, "PATH": str(self.bin), "TERM": "xterm",
+        self.env = {**{k: v for k, v in os.environ.items() if k != "LANG" and not k.startswith("LC_")}, "PATH": str(self.bin), "TERM": "xterm", "LANG": "C",
                     "SYSINFO_COMMAND_LOG": str(self.log)}
         self.shell = os.environ.get("SYSINFO_TEST_SH", "/bin/sh")
         for tool in ("sh", "awk", "cat", "mkdir", "mktemp", "chmod", "mv", "rm", "grep"):
@@ -186,7 +186,7 @@ class SysinfoTests(unittest.TestCase):
     def test_warning_colors_and_boundaries(self):
         f = self.fixture()
         f.command("df", "Filesystem 1024-blocks Used Available Capacity Mounted on\n"
-                  + "".join(f"/dev/d{i} 1048576 800000 100000 {pct}% /d{i}\n"
+                  + "".join(f"/dev/d{i} 1048576 {800000 + i} 100000 {pct}% /d{i}\n"
                             for i, pct in enumerate((79, 80, 94, 95))))
         p = f.run("--details", "--color")
         text = self.table(p)
@@ -209,14 +209,19 @@ class SysinfoTests(unittest.TestCase):
         self.assertFalse(set(ram) & set("\u258f\u258e\u258d\u258c\u258b\u258a\u2589\u2500"), ram)
         self.assertNotIn("[", ram)
         self.assertNotIn("#", ram)
+        del f.env["LANG"]  # OpenWrt: no locale, but a UTF-8 xterm.
+        self.assertIn("\u2588", self.line(self.table(f.run()), "RAM"))
+        f.env["TERM"] = "dumb"
+        self.assertNotIn("\u2588", self.line(self.table(f.run()), "RAM"))
         f.env["LANG"] = "C"
+        f.env["TERM"] = "xterm"
         ram = self.line(self.table(f.run()), "RAM")
         self.assertTrue(set(ram.split(" : ")[1].split()[0]) <= {"=", "-"}, ram)
 
     def test_many_disks_and_interfaces_stay_bounded(self):
         f = self.fixture()
         f.command("df", "Filesystem 1024-blocks Used Available Capacity Mounted on\n"
-                  + "".join(f"/dev/d{i} 1048576 800000 100000 96% /disk{i}\n" for i in range(100)))
+                  + "".join(f"/dev/d{i} 1048576 {800000 + i} 100000 96% /disk{i}\n" for i in range(100)))
         f.command("ip", "".join(f"{i+1}: eth{i}: <UP> state UP\n    inet 10.0.0.{i+1}/24\n" for i in range(100)))
         text = self.table(f.run())
         self.assertLessEqual(len(text.splitlines()), 17)
@@ -285,6 +290,31 @@ class SysinfoTests(unittest.TestCase):
         self.assertIn("192.168.1.1", text)
         df = next(line for line in f.log.read_text().splitlines() if line.startswith("df:"))
         self.assertNotIn("/rom", df)
+
+    def test_rules_follow_longest_line_capped_by_columns(self):
+        f = self.fixture()
+        f.files["/etc/os-release"].write_text('PRETTY_NAME="' + "X" * 90 + '"\n')
+        lines = self.table(f.run()).splitlines()
+        self.assertEqual(len(lines[0]), max(len(l) for l in lines))
+        f.env["COLUMNS"] = "50"
+        self.assertEqual(len(self.table(f.run()).splitlines()[0]), 50)
+
+    def test_identical_disks_shown_once_and_zero_is_megabytes(self):
+        f = self.fixture()
+        f.command("df", DISKS + "/dev/ubi 104857600 52428800 30000000 70% /overlay\n")
+        text = self.table(f.run("--details"))
+        self.assertNotIn("/overlay", text)
+        f.files["/proc/meminfo"].write_text("MemTotal: 16777216 kB\nMemAvailable: 12582912 kB\nSwapTotal: 1024 kB\nSwapFree: 1024 kB\n")
+        self.assertIn("0M / 1.0M", self.line(self.table(f.run()), "Swap"))
+
+    def test_openwrt_shows_all_interfaces_one_per_line(self):
+        f = self.fixture()
+        f.files["/etc/openwrt_release"].write_text("DISTRIB_DESCRIPTION='OpenWrt 24.10.5'\n")
+        f.command("ip", IP + "".join(f"{i+8}: wg{i}: <UP> state UNKNOWN\n    inet 10.8.1.{i}/32\n" for i in range(6)))
+        lines = self.table(f.run()).splitlines()
+        ip = [l for l in lines if l.startswith("IP ") or l.startswith("           : ")]
+        self.assertGreaterEqual(len(ip), 9)
+        self.assertTrue(any("wg5 10.8.1.5" in l for l in ip))
 
     def test_openwrt_overlay_tmp_and_arm_cpu(self):
         f = self.fixture()

@@ -14,8 +14,23 @@ sysinfo_payload=$(cat <<'SYSINFO_PAYLOAD'
 
 # POSIX syntax also works with the system Bash 3.2 on macOS.
 # Decide on Unicode bars before forcing the C locale for parsing.
+# Explicit locale wins; with no locale at all (OpenWrt) trust common UTF-8 terminals.
 utf8=0
-case "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" in *[Uu][Tt][Ff]-8*|*[Uu][Tt][Ff]8*) utf8=1 ;; esac
+sysinfo_locale=${LC_ALL:-${LC_CTYPE:-${LANG:-}}}
+case "$sysinfo_locale" in
+    *[Uu][Tt][Ff]-8*|*[Uu][Tt][Ff]8*) utf8=1 ;;
+    '') case "${TERM:-}" in xterm*|screen*|tmux*|rxvt*|alacritty|foot*|wezterm|vt220|linux) utf8=1 ;; esac ;;
+esac
+case "${SYSINFO_UTF8:-}" in 1) utf8=1 ;; 0) utf8=0 ;; esac
+# Terminal width caps the separators (0 = unknown).
+cols=${COLUMNS:-0}
+case "$cols" in ''|*[!0-9]*) cols=0 ;; esac
+if [ "$cols" = 0 ] && [ -t 1 ] && command -v tput >/dev/null 2>&1; then
+    cols=$(tput cols 2>/dev/null) || cols=0
+    case "$cols" in ''|*[!0-9]*) cols=0 ;; esac
+fi
+openwrt=0
+[ -s /etc/openwrt_release ] && openwrt=1
 LC_ALL=C
 export LC_ALL
 set -f
@@ -172,8 +187,6 @@ collect() {
         sources='|'
         # OpenWrt: hide the overlay upper dir (same space as /), keep /tmp tmpfs.
         overlay_upper=
-        openwrt=0
-        [ -s /etc/openwrt_release ] && openwrt=1
         if [ -r /proc/self/mounts ]; then
             while read -r source mount rest; do
                 case "$source" in overlayfs:/*) overlay_upper=${source#overlayfs:} ;; esac
@@ -203,6 +216,8 @@ collect() {
             df -kP "$@" 2>/dev/null || printf '[DISKERROR]\n'
         fi
     fi
+    printf '[DT]\n'
+    if [ -r /proc/device-tree/compatible ]; then tr '\000' '\n' < /proc/device-tree/compatible 2>/dev/null; echo; fi
     printf '[NET]\n'
     if [ "$system" = Linux ] && command -v ip >/dev/null 2>&1; then
         ip -4 addr show 2>/dev/null || printf '[NETERROR]\n'
@@ -215,13 +230,20 @@ collect() {
 
 # One awk process handles parsing, ranking, arithmetic and table rendering.
 collect | awk -v os_type="$system" -v host="$host" -v kernel="$kernel" \
-    -v arch="$arch" -v details="$details" -v all_interfaces="$all_interfaces" -v color="$use_color" -v utf8="$utf8" '
+    -v arch="$arch" -v details="$details" -v all_interfaces="$all_interfaces" -v color="$use_color" -v utf8="$utf8" -v cols="$cols" -v openwrt="$openwrt" '
 function trim(s) { sub(/^[ \t]+/, "", s); sub(/[ \t]+$/, "", s); return s }
 function repeat(c, n, s) { if(n<=0) return ""; s=sprintf("%" n "s", ""); gsub(/ /, c, s); return s }
 function fit(s, n) { if (length(s)>n) s=substr(s,1,n-1) "~"; return s }
 function paint(s, c) { return color && c ? esc "[" c "m" s esc "[0m" : s }
-function rule() { print paint(repeat("-",W),"2") }
-function row(k,v,c) { printf "%s : %s\n", paint(sprintf("%-" L "s",fit(k,L)),"32"), c=="raw"?v:paint(v,c?c:"36") }
+function out(s) { buf[++nbuf]=s }
+function rule() { buf[++nbuf]=RULE }
+function vislen(s) { gsub(/\033\[[0-9;]*m/,"",s); gsub(/[\200-\277]/,"",s); return length(s) }
+function flush( i,w,m) {
+    m=0; for(i=1;i<=nbuf;i++) if(buf[i]!=RULE && (w=vislen(buf[i]))>m) m=w
+    if(cols>0 && m>cols) m=cols
+    for(i=1;i<=nbuf;i++) print (buf[i]==RULE ? paint(repeat("-",m),"2") : buf[i])
+}
+function row(k,v,c) { out(sprintf("%s : %s", paint(sprintf("%-" L "s",fit(k,L)),"32"), c=="raw"?v:paint(v,c?c:"36"))) }
 function percent(used,total) { return total>0 ? int(used*100/total+0.5) : 0 }
 function level(p) { return p>=95?"31":(p>=80?"33":"32") }
 function bar(p,c, e,n,f,part) {
@@ -230,11 +252,11 @@ function bar(p,c, e,n,f,part) {
     n=int(p*BW/100+0.5)
     return paint(repeat("\342\226\210",n),c) paint(repeat("\342\226\221",BW-n),"2")
 }
-function human(k) { if(k>=1073741824) return sprintf("%.1fT",k/1073741824); if(k>=1048576) return sprintf("%.1fG",k/1048576); if(k>=1024) return sprintf("%.1fM",k/1024); return sprintf("%.0fK",k) }
+function human(k) { if(k>=1073741824) return sprintf("%.1fT",k/1073741824); if(k>=1048576) return sprintf("%.1fG",k/1048576); if(k<=0) return "0M"; return sprintf("%.1fM",k/1024) }
 function resource(k,used,total,p, c) {
     c=level(p)
-    printf "%s : %s %s  %s\n", paint(sprintf("%-" L "s",fit(k,L)),"32"), bar(p,c), \
-        paint(sprintf("%3d%%",p) (p>=95?" !":"  "),c), human(used) " / " human(total)
+    out(sprintf("%s : %s %s  %s", paint(sprintf("%-" L "s",fit(k,L)),"32"), bar(p,c), \
+        paint(sprintf("%3d%%",p) (p>=95?" !":"  "),c), human(used) " / " human(total)))
 }
 function cleancpu(s) { gsub(/\((R|r|TM|tm)\)/,"",s); gsub(/ CPU /," ",s); sub(/ CPU$/,"",s); sub(/^CPU /,"",s); gsub(/ Processor/,"",s); gsub(/  +/," ",s); return trim(s) }
 function units(s, n) { n=s+0; if(s~/G$/) n*=1048576; else if(s~/M$/) n*=1024; else if(s~/T$/) n*=1073741824; return n }
@@ -261,10 +283,10 @@ function linux_stats( line,a,key,value,free_mem,cache,available,model) {
     }
     close("/proc/cpuinfo")
     if(cpu=="" && implementer=="0x41" && (part in ARM)) cpu="ARM " ARM[part]
-    board=""; if((getline line < "/tmp/sysinfo/model")>0) { board=line; sub(/ *\(.*\)$/,"",board) }
+    if((getline line < "/tmp/sysinfo/model")>0) { board=line; sub(/ *\(.*\)$/,"",board) }
     close("/tmp/sysinfo/model")
     if(cpu=="") cpu=model!=""?model:board
-    else if(board!="" && board!=cpu) cpu=cpu ", " board
+    else if(board!="" && board!=cpu) cpu=cpu " (" board ")"
     while((getline line < "/proc/meminfo")>0) {
         split(line,a,/[ \t]+/); key=a[1]; value=a[2]+0
         if(key=="MemTotal:") mem_total=value
@@ -311,12 +333,13 @@ mode=="[MACMEM]" {
 mode=="[NOW]" { if(boot>0) seconds=$0-boot; next }
 mode=="[ROUTE]" { if($1=="interface:") default_iface=$2; next }
 mode=="[DISK]" && NF>=6 && $2~/^[0-9]+$/ && $5~/^[0-9]+%$/ {
-    if(seen_disk[$1]++) next
+    if(seen_disk[$1]++ || seen_size[$2 " " $3]++) next
     ndisks++; disk_used[ndisks]=$3+0; disk_total[ndisks]=$2+0; disk_pct[ndisks]=$5+0
     mount=$6; for(i=7;i<=NF;i++) mount=mount " " $i
     disk_mount[ndisks]=mount; if(mount=="/") root_disk=ndisks
     next
 }
+mode=="[DT]" { if(soc=="" && $0~/^[a-z0-9-]+,[a-z]*[0-9]/ && $0!~/^(cudy|tplink|tp-link|xiaomi|asus|netgear|linksys|glinet|gl-inet|zyxel|dlink|d-link|tenda|huawei|raspberrypi)/) soc=$0; next }
 mode=="[NET]" {
     if($1~/^[0-9]+:$/) { iface=$2; sub(/:$/,"",iface); sub(/@.*/,"",iface); down=$0~/state DOWN/ }
     else if($0~/^[^ \t]/) { iface=$1; sub(/:$/,"",iface); down=0 }
@@ -339,10 +362,17 @@ END {
     if(os=="") os=os_type
     L=10; for(i=1;i<=ndisks;i++) if(length(disk_mount[i])>L) L=length(disk_mount[i])
     if(L>14) L=14
-    BW=20; W=L+3+BW+7+16
+    BW=20; RULE="\001rule"
     rule()
     row("Hostname",host)
     row("OS",paint(os ", " arch ", ","36") paint(kernel,"35"),"raw")
+    if(soc!="") {
+        split(soc,a,","); v=a[1]
+        if(v=="mediatek") v="MediaTek"; else if(v=="qcom") v="Qualcomm"; else if(v=="brcm") v="Broadcom"
+        else if(v=="rockchip") v="Rockchip"; else if(v=="allwinner") v="Allwinner"; else if(v=="ralink") v="Ralink"
+        else if(v=="realtek") v="Realtek"; else if(v=="marvell") v="Marvell"; else if(v=="amlogic") v="Amlogic"
+        cpu=v " " toupper(a[2]) (board!=""?" (" board ")":"")
+    }
     c=cleancpu(cpu); row("CPU",(cpus?cpus (utf8?" \303\227 ":" x "):"") (c!=""?c:(cpus?"":"N/A")))
     up=seconds!="" ? sprintf("%dd %dh %dm",int(seconds/86400),int(seconds%86400/3600),int(seconds%3600/60)) : "N/A"
     row("Uptime",up)
@@ -350,7 +380,7 @@ END {
     rule()
     if(mem_total>0) resource("RAM",mem_used,mem_total,percent(mem_used,mem_total)); else row("RAM","N/A")
     if(swap_total>0) resource("Swap",swap_total-swap_free,swap_total,percent(swap_total-swap_free,swap_total)); else row("Swap","off","2")
-    print ""
+    out("")
     limit=details?ndisks:4; count=0
     if(root_disk) { selected[root_disk]=1; count=1 }
     while(count<limit && count<ndisks) {
@@ -365,18 +395,25 @@ END {
     if(!ndisks) row("Disks",disk_error?"unavailable":"no local filesystems","2")
     if(disk_error) row("Disks","incomplete disk data","33")
     rule()
-    count=0; ips=""
+    count=0; ips=""; if(openwrt) all_interfaces=1; nip=0
     if(default_iface in net_addr && (all_interfaces || !docker(default_iface))) {
-        ips=paint(default_iface,"2") " " paint(net_addr[default_iface],"35"); net_printed[default_iface]=1; count++
+        ip_item[++nip]=paint(default_iface,"2") " " paint(net_addr[default_iface],"35"); net_printed[default_iface]=1; count++
     }
     for(i=1;i<=nnets;i++) {
         name=net_name[i]; if(net_printed[name] || (!all_interfaces && virtual(name))) continue
         if(!all_interfaces && count>=3) break
-        ips=ips (ips?", ":"") paint(name,"2") " " paint(net_addr[name],"35"); count++
+        ip_item[++nip]=paint(name,"2") " " paint(net_addr[name],"35"); count++
     }
     if(!count) row("IP",net_error?"unavailable (install iproute2)":"no active IPv4","2")
-    else row("IP",ips,"raw")
+    else {
+        # One line if it fits (terminal or 72 cols), else one interface per line.
+        for(i=1;i<=nip;i++) ips=ips (i>1?", ":"") ip_item[i]
+        lim=cols>0?cols:72; if(lim>72) lim=72
+        if(L+3+vislen(ips)<=lim) row("IP",ips,"raw")
+        else for(i=1;i<=nip;i++) row(i==1?"IP":"",ip_item[i],"raw")
+    }
     rule()
+    flush()
     if(disk_error) exit 1
 }'
 SYSINFO_PAYLOAD
