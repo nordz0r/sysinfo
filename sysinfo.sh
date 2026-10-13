@@ -13,6 +13,9 @@ sysinfo_payload=$(cat <<'SYSINFO_PAYLOAD'
 # Installation never changes .bashrc; all collection/rendering stays here.
 
 # POSIX syntax also works with the system Bash 3.2 on macOS.
+# Decide on Unicode bars before forcing the C locale for parsing.
+utf8=0
+case "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" in *[Uu][Tt][Ff]-8*|*[Uu][Tt][Ff]8*) utf8=1 ;; esac
 LC_ALL=C
 export LC_ALL
 set -f
@@ -168,7 +171,13 @@ collect() {
         set --
         sources='|'
         if [ -r /proc/self/mounts ]; then
-            while read -r source mount type rest; do
+            while read -r source mount type opts rest; do
+                # Container/kubelet bind mounts duplicate real disks and are often unreadable.
+                case "$mount" in
+                    /run/*|/var/lib/kubelet/*|/var/lib/docker/*|/var/lib/containerd/*|/var/lib/rancher/*|/snap/*|/mnt/wsl*|/usr/lib/wsl/*|/usr/lib/modules*|/usr/src/*) continue ;;
+                esac
+                # Read-only images (WSL headers/modules, squashfs) are always "full".
+                case "$mount,$opts" in /,*) ;; *,ro|*,ro,*) continue ;; esac
                 case "$type" in
                     ext2|ext3|ext4|xfs|btrfs|zfs|overlay|f2fs|jffs2|ubifs|ufs|vfat|msdos|exfat|ntfs|ntfs3|fuseblk)
                         case "$sources" in *"|$source|"*) continue ;; esac
@@ -195,25 +204,32 @@ collect() {
 
 # One awk process handles parsing, ranking, arithmetic and table rendering.
 collect | awk -v os_type="$system" -v host="$host" -v kernel="$kernel" \
-    -v arch="$arch" -v details="$details" -v all_interfaces="$all_interfaces" -v color="$use_color" '
+    -v arch="$arch" -v details="$details" -v all_interfaces="$all_interfaces" -v color="$use_color" -v utf8="$utf8" '
 function trim(s) { sub(/^[ \t]+/, "", s); sub(/[ \t]+$/, "", s); return s }
-function repeat(c, n, s) { s=sprintf("%" n "s", ""); gsub(/ /, c, s); return s }
-function fit(s, n) { if (length(s)>n) s=substr(s,1,n-3) "..."; return sprintf("%-" n "s",s) }
+function repeat(c, n, s) { if(n<=0) return ""; s=sprintf("%" n "s", ""); gsub(/ /, c, s); return s }
+function fit(s, n) { if (length(s)>n) s=substr(s,1,n-1) "~"; return s }
 function paint(s, c) { return color && c ? esc "[" c "m" s esc "[0m" : s }
-function border() { printf "+%s+\n", repeat("-",67) }
-function section(s) { printf "| %s |\n", paint(fit(s,65),"36") }
-function row(k,v) { printf "| %s | %s |\n", fit(k,10), fit(v,52) }
-function note(s,c) { printf "| %s |\n", paint(fit(s,65),c) }
+function rule() { print paint(repeat("-",W),"2") }
+function row(k,v,c) { printf "%s : %s\n", paint(sprintf("%-" L "s",fit(k,L)),"32"), c=="raw"?v:paint(v,c?c:"36") }
 function percent(used,total) { return total>0 ? int(used*100/total+0.5) : 0 }
-function bar(p, n) { p=p<0?0:(p>100?100:p); n=int(p*16/100+0.5); return "[" repeat("#",n) repeat("-",16-n) "]" }
-function human(k) { if(k>=1048576) return sprintf("%.1f GiB",k/1048576); if(k>=1024) return sprintf("%.1f MiB",k/1024); return sprintf("%.0f KiB",k) }
-function resource(k,used,total,p,warn, c) {
-    c=warn ? (p>=90?"31":(p>=80?"33":"")) : "36"
-    printf "| %s | %s | %s | %s |\n", fit(k,10), paint(fit(bar(p),18),c), \
-        paint(fit(p "%" (warn && p>=90?" !":""),6),c), fit(human(used) " / " human(total),22)
+function level(p) { return p>=95?"31":(p>=80?"33":"32") }
+function bar(p,c, e,n,f,part) {
+    p=p<0?0:(p>100?100:p)
+    if(!utf8) { n=int(p*BW/100+0.5); return paint(repeat("=",n),c) paint(repeat("-",BW-n),"2") }
+    e=int(p*BW*8/100+0.5); n=int(e/8); f=e%8
+    part=f?substr(EIGHTHS,(f-1)*3+1,3):""
+    return paint(repeat("\342\226\210",n) part,c) paint(repeat("\342\224\200",BW-n-(f?1:0)),"2")
 }
+function human(k) { if(k>=1073741824) return sprintf("%.1fT",k/1073741824); if(k>=1048576) return sprintf("%.1fG",k/1048576); if(k>=1024) return sprintf("%.1fM",k/1024); return sprintf("%.0fK",k) }
+function resource(k,used,total,p, c) {
+    c=level(p)
+    printf "%s : %s %s  %s\n", paint(sprintf("%-" L "s",fit(k,L)),"32"), bar(p,c), \
+        paint(sprintf("%3d%%",p) (p>=95?" !":"  "),c), human(used) " / " human(total)
+}
+function cleancpu(s) { gsub(/\((R|r|TM|tm)\)/,"",s); gsub(/ CPU /," ",s); sub(/ CPU$/,"",s); sub(/^CPU /,"",s); gsub(/ Processor/,"",s); gsub(/  +/," ",s); return trim(s) }
 function units(s, n) { n=s+0; if(s~/G$/) n*=1048576; else if(s~/M$/) n*=1024; else if(s~/T$/) n*=1073741824; return n }
 function docker(s) { return s~/^docker[0-9]*$/ || s~/^veth/ || (length(s)==15 && s~/^br-[0-9a-f]+$/) }
+function virtual(s) { return docker(s) || s~/^(flannel|cni|cali|vxlan|kube-|virbr|tunl|lxcbr|weave|cilium|genev)/ }
 function linux_stats( line,a,key,value,free_mem,cache,available,model) {
     while((getline line < "/etc/os-release")>0) {
         if(line~/^PRETTY_NAME=/) { sub(/^PRETTY_NAME=/,"",line); sub(/^["\047]/,"",line); sub(/["\047]$/,"",line); os=line }
@@ -255,7 +271,7 @@ function linux_stats( line,a,key,value,free_mem,cache,available,model) {
     }
     close("/proc/net/route")
 }
-BEGIN { esc=sprintf("%c",27); if(os_type=="Linux") linux_stats() }
+BEGIN { esc=sprintf("%c",27); EIGHTHS="\342\226\217\342\226\216\342\226\215\342\226\214\342\226\213\342\226\212\342\226\211"; if(os_type=="Linux") linux_stats() }
 /^\[[A-Z]+\]$/ { mode=$0; if(mode=="[DISKERROR]") disk_error=1; if(mode=="[NETERROR]") net_error=1; next }
 mode=="[OS]" { os="macOS " $0; next }
 mode=="[MACSYS]" {
@@ -303,51 +319,49 @@ END {
         } else mem_total=0
     }
     if(os=="") os=os_type
-    border(); section("SYSTEM")
-    row("Host",host); row("OS",os " / " arch)
-    row("CPU",(cpus?cpus " logical CPUs":"N/A") (cpu!=""?" / " cpu:""))
-    row("Kernel",kernel)
+    L=10; for(i=1;i<=ndisks;i++) if(length(disk_mount[i])>L) L=length(disk_mount[i])
+    if(L>14) L=14
+    BW=20; W=L+3+BW+7+16
+    rule()
+    row("Hostname",host)
+    row("OS",os ", " arch)
+    row("Kernel",kernel,"35")
+    c=cleancpu(cpu); row("CPU",(cpus?cpus (utf8?" \303\227 ":" x "):"") (c!=""?c:(cpus?"":"N/A")))
     up=seconds!="" ? sprintf("%dd %dh %dm",int(seconds/86400),int(seconds%86400/3600),int(seconds%3600/60)) : "N/A"
-    row("Uptime",up (load!=""?" / Load: " load:""))
-    border(); section("RESOURCES")
-    printf "| %s | %s | %s | %s |\n",fit("Resource",10),fit("Usage",18),fit("%",6),fit("Used / Total",22)
-    printf "+%s+%s+%s+%s+\n",repeat("-",12),repeat("-",20),repeat("-",8),repeat("-",24)
-    if(mem_total>0) resource("RAM",mem_used,mem_total,percent(mem_used,mem_total),0); else row("RAM","N/A")
-    if(swap_total>0) resource("Swap",swap_total-swap_free,swap_total,percent(swap_total-swap_free,swap_total),0); else row("Swap","Disabled")
-    limit=details?ndisks:3
-    if(root_disk && !details) { selected[root_disk]=1; count=1 }
+    row("Uptime",up (load!=""?"  load " load:""))
+    rule()
+    if(mem_total>0) resource("RAM",mem_used,mem_total,percent(mem_used,mem_total)); else row("RAM","N/A")
+    if(swap_total>0) resource("Swap",swap_total-swap_free,swap_total,percent(swap_total-swap_free,swap_total)); else row("Swap","off","2")
+    limit=details?ndisks:4; count=0
+    if(root_disk) { selected[root_disk]=1; count=1 }
     while(count<limit && count<ndisks) {
         best=0; for(i=1;i<=ndisks;i++) if(!selected[i] && (!best || disk_pct[i]>disk_pct[best])) best=i
         if(!best) break; selected[best]=1; count++
     }
+    if(root_disk) { resource(disk_mount[root_disk],disk_used[root_disk],disk_total[root_disk],disk_pct[root_disk]); printed[root_disk]=1 }
     for(j=1;j<=count;j++) {
         best=0; for(i=1;i<=ndisks;i++) if(selected[i] && !printed[i] && (!best || disk_pct[i]>disk_pct[best])) best=i
-        if(best) { resource(disk_mount[best],disk_used[best],disk_total[best],disk_pct[best],1); printed[best]=1 }
+        if(best) { resource(disk_mount[best],disk_used[best],disk_total[best],disk_pct[best]); printed[best]=1 }
     }
-    hidden=ndisks-count; warnings=0; critical=0
-    for(i=1;i<=ndisks;i++) if(!selected[i]) {
-        if(disk_pct[i]>=80) warnings++
-        if(disk_pct[i]>=90) critical++
-    }
-    if(hidden>0) note("+" hidden " other filesystems" (warnings?" (" warnings " warning" (warnings==1?"":"s") (critical?", " critical " critical":"") ")":""),critical?"31":(warnings?"33":""))
-    if(!ndisks) row("Disks",disk_error?"Unavailable":"No supported local filesystems")
-    if(disk_error) note("Warning: incomplete disk data")
-    border(); section("NETWORK")
-    count=0; eligible=0; omitted_docker=0
-    for(i=1;i<=nnets;i++) { name=net_name[i]; if(!all_interfaces && docker(name)) omitted_docker++; else eligible++ }
+    if(!ndisks) row("Disks",disk_error?"unavailable":"no local filesystems","2")
+    crit=""; ncrit=0
+    for(i=1;i<=ndisks;i++) if(disk_pct[i]>=95) { ncrit++; if(ncrit<=3) crit=crit (crit?", ":"") disk_mount[i] " " disk_pct[i] "%" }
+    if(ncrit>3) crit=crit " (+" (ncrit-3) ")"
+    if(disk_error) crit=crit (crit?"; ":"") "incomplete disk data"
+    rule()
+    count=0; ips=""
     if(default_iface in net_addr && (all_interfaces || !docker(default_iface))) {
-        row(default_iface,net_addr[default_iface] (docker(default_iface)?" [Docker]":"")); net_printed[default_iface]=1; count++
+        ips=paint(net_addr[default_iface],"35") " " paint(default_iface,"2"); net_printed[default_iface]=1; count++
     }
     for(i=1;i<=nnets;i++) {
-        name=net_name[i]; if(net_printed[name] || (!all_interfaces && docker(name))) continue
-        if(!all_interfaces && count>=2) break
-        row(name,net_addr[name] (docker(name)?" [Docker]":"")); count++
+        name=net_name[i]; if(net_printed[name] || (!all_interfaces && virtual(name))) continue
+        if(!all_interfaces && count>=3) break
+        ips=ips (ips?", ":"") paint(net_addr[name],"35") " " paint(name,"2"); count++
     }
-    if(!count) note(net_error?"IP data unavailable (install iproute2 or ifconfig)":"No active IPv4 interfaces")
-    summary=""; if(eligible>count) summary="+" (eligible-count) " other interfaces"
-    if(omitted_docker) summary=summary (summary?" / ":"") omitted_docker " Docker interface" (omitted_docker==1?"":"s") " hidden"
-    if(summary!="") note(summary)
-    border()
+    if(!count) row("IP",net_error?"unavailable (install iproute2)":"no active IPv4","2")
+    else row("IP",ips,"raw")
+    if(crit!="") row("Warning","disk >= 95%: " crit,"1;31")
+    rule()
     if(disk_error) exit 1
 }'
 SYSINFO_PAYLOAD

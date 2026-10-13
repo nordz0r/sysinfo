@@ -84,21 +84,40 @@ the startup line silently does nothing; it can be removed manually if desired.
 
 ## Output
 
-The default table is 69 columns wide and at most 23 lines under normal conditions:
+A compact `Label : value` list (about 12-17 lines), no table borders, thin
+dashed separators:
 
-- **SYSTEM:** hostname, OS, architecture, logical CPU count/model, kernel, uptime,
-  and load average.
-- **RESOURCES:** RAM, swap, and up to three local filesystems. The root filesystem
-  is retained; remaining slots show the highest usage first. Extra filesystems
-  are summarized, including hidden warning and critical counts.
-- **NETWORK:** up to two IPv4 interfaces, with the default-route interface first.
-  Loopback, down interfaces reported by `ip`, and conventional Docker interfaces
-  (`dockerN`, `br-` followed by 12 hexadecimal digits, and `veth*`) are omitted.
-  OpenWrt's `br-lan` stays visible. Extra interfaces are summarized.
+```
+--------------------------------------------------------
+Hostname   : dd.goldfinches.ru
+OS         : Debian GNU/Linux 12 (bookworm), x86_64
+Kernel     : 6.1.0-52-amd64
+CPU        : 4 × Intel Core i5-10400 @ 2.90GHz
+Uptime     : 6d 23h 31m  load 0.39, 0.75, 0.76
+--------------------------------------------------------
+RAM        : █████████████████▎──  86%    8.3G / 9.7G
+Swap       : █████▍──────────────  27%    1.1G / 4.0G
+/          : ███████████████─────  75%    34.8G / 49.0G
+/mnt/hdd   : ███████████████████─  95% !  87.4G / 97.9G
+/mnt/iscsi : ███████████▎────────  56%    76.3G / 143.6G
+--------------------------------------------------------
+IP         : 10.0.0.118 ens160
+Warning    : disk >= 95%: /mnt/hdd 95%
+--------------------------------------------------------
+```
 
-Disk bars and percentages turn yellow at **80%** and red at **90%**. Critical
-rows retain `!` without color. Summaries of hidden disk warnings use the same
-colors. Percentages come from `df`, accounting for available space and filesystem
+- CPU model is cleaned of `(R)`, `(TM)` and the word `CPU`.
+- RAM, swap and up to four local filesystems (root first, then the fullest).
+  Container/kubelet bind mounts, `/run`, WSL helper mounts and read-only
+  images are skipped. `--details` shows every filesystem.
+- IP: up to three IPv4 addresses with interface names, default route first.
+  Docker and overlay interfaces (`docker*`, `br-<hex>`, `veth*`, `flannel*`,
+  `cni*`, `cali*`, `vxlan*`, ...) are hidden unless `--all-interfaces`.
+
+Bars use Unicode blocks with eighth-step precision when the locale is UTF-8 and
+fall back to ASCII (`=`/`-`) otherwise. Colors: green below **80%**, yellow from
+80%, red with `!` from **95%**; any filesystem at 95%+ also gets a `Warning` line.
+Percentages come from `df`, accounting for available space and filesystem
 reserves, rather than being recomputed from rounded display sizes.
 
 Disk capacities are not summed: repeated mounts of the same device are deduplicated,

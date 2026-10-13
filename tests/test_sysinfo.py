@@ -77,7 +77,7 @@ class Fixture:
         self.common.write_text(source)
         self.compat = self.root / "sysinfo_v2.sh"
         self.compat.write_text(source)
-        self.env = {**os.environ, "PATH": str(self.bin), "TERM": "xterm",
+        self.env = {**{k: v for k, v in os.environ.items() if k != "LANG" and not k.startswith("LC_")}, "PATH": str(self.bin), "TERM": "xterm",
                     "SYSINFO_COMMAND_LOG": str(self.log)}
         self.shell = os.environ.get("SYSINFO_TEST_SH", "/bin/sh")
         for tool in ("sh", "awk", "cat", "mkdir", "mktemp", "chmod", "mv", "rm", "grep"):
@@ -134,94 +134,115 @@ class SysinfoTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         lines = ANSI.sub("", result.stdout).splitlines()
         self.assertTrue(lines)
-        self.assertTrue(all(len(line) == 69 for line in lines), lines)
+        self.assertTrue(set(lines[0]) == {"-"} and lines[-1] == lines[0], lines)
+        self.assertTrue(all(" : " in line for line in lines if set(line) != {"-"}), lines)
+        self.assertNotIn("+-", "".join(lines))  # No table borders.
         return "\n".join(lines)
+
+    def line(self, text, label):
+        return next(line for line in text.splitlines() if line.startswith(label + " ") or line.startswith(label + ":"))
 
     def test_live_linux_with_sh_and_bash(self):
         for shell in ("/bin/sh", "/bin/bash"):
             p = subprocess.run([shell, str(COMMON)], capture_output=True, text=True, timeout=10)
             text = self.table(p)
-            self.assertIn("logical CPUs", text)
-            self.assertIn("RESOURCES", text)
-            self.assertIn("NETWORK", text)
+            for label in ("Hostname", "OS", "Kernel", "CPU", "Uptime", "RAM", "IP"):
+                self.line(text, label)
             self.assertNotIn("\x1b", p.stdout)
 
-    def test_compact_prioritizes_disks_and_default_route(self):
+    def test_compact_layout_disks_and_default_route(self):
         f = self.fixture()
         text = self.table(f.run())
-        self.assertIn("| /data", text)
-        self.assertIn("| /backup", text)
-        self.assertRegex(text, r"\| / +\|")
-        self.assertIn("+2 other filesystems (1 warning)", text)
-        self.assertIn("70%", text)  # df capacity, not used/total = 50%.
-        self.assertLess(text.index("| br-lan"), text.index("| eth0"))
-        self.assertNotIn("| wlan0", text)
+        lines = text.splitlines()
+        self.assertLessEqual(len(lines), 16)
+        self.assertIn("2 x Fixture", self.line(text, "CPU"))
+        self.assertIn("2d 4h 4m  load 0.10, 0.20, 0.30", self.line(text, "Uptime"))
+        mounts = [l.split(" :")[0].strip() for l in lines if l.startswith("/")]
+        self.assertEqual(mounts, ["/", "/data", "/backup", "/extra"])  # root first, then fullest.
+        self.assertIn("70%", self.line(text, "/"))  # df capacity, not used/total = 50%.
+        self.assertNotIn("other", text)
+        ip = self.line(text, "IP")
+        self.assertLess(ip.index("br-lan"), ip.index("eth0"))
         self.assertNotIn("172.17.0.1", text)
-        self.assertIn("3 Docker interfaces hidden", text)
-        self.assertLessEqual(len(text.splitlines()), 23)
+        self.assertNotIn("Warning", text)
         commands = f.log.read_text().splitlines()
         self.assertEqual(sorted(line.split(":")[0] for line in commands), ["df", "ip", "uname"])
         df = next(line for line in commands if line.startswith("df:"))
         self.assertEqual(df, "df:-kP /")  # No NFS, tmpfs or duplicate bind mount.
 
-    def test_details_includes_networks_and_tiny_disk_usage(self):
-        text = self.table(self.fixture().run("--details"))
-        self.assertIn("| /small", text)
-        self.assertIn("1.7 MiB", text)
-        self.assertIn("172.17.0.1 [Docker]", text)
-        self.assertNotIn("other filesystems", text)
+    def test_details_includes_all_disks_and_interfaces(self):
+        f = self.fixture()
+        f.command("df", DISKS + "/dev/x 1048576 1741 900000 1% /x\n")
+        text = self.table(f.run("--details"))
+        self.assertIn("/x ", text)
+        self.assertIn("1.7M", text)
+        self.assertIn("172.17.0.1", text)
 
     def test_warning_colors_and_boundaries(self):
         f = self.fixture()
         f.command("df", "Filesystem 1024-blocks Used Available Capacity Mounted on\n"
                   + "".join(f"/dev/d{i} 1048576 800000 100000 {pct}% /d{i}\n"
-                            for i, pct in enumerate((79, 80, 89, 90))))
+                            for i, pct in enumerate((79, 80, 94, 95))))
         p = f.run("--details", "--color")
-        self.table(p)
-        for mount, pct, color in (("/d0", 79, None), ("/d1", 80, "33"),
-                                  ("/d2", 89, "33"), ("/d3", 90, "31")):
-            line = next(line for line in p.stdout.splitlines() if f"| {mount} " in line)
-            if color:
-                self.assertIn(f"\x1b[{color}m", line)
-            else:
-                self.assertNotIn("\x1b", line)
+        text = self.table(p)
+        for mount, pct, color in (("/d0", 79, "32"), ("/d1", 80, "33"),
+                                  ("/d2", 94, "33"), ("/d3", 95, "31")):
+            line = next(line for line in p.stdout.splitlines() if f"/{mount[1:]} " in ANSI.sub("", line)[:12])
+            self.assertIn(f"\x1b[{color}m", line)
             self.assertIn(f"{pct}%", line)
-        self.assertIn("90% !", ANSI.sub("", p.stdout))
+        self.assertIn("95% !", text)
+        self.assertNotIn("94% !", text)
+        self.assertIn("disk >= 95%: /d3 95%", self.line(text, "Warning"))
+
+    def test_unicode_bars_and_ascii_fallback(self):
+        f = self.fixture()
+        f.env["LANG"] = "ru_RU.UTF-8"
+        text = self.table(f.run())
+        ram = self.line(text, "RAM")
+        self.assertIn("\u2588", ram)
+        self.assertNotIn("[", ram)
+        self.assertNotIn("#", ram)
+        f.env["LANG"] = "C"
+        ram = self.line(self.table(f.run()), "RAM")
+        self.assertTrue(set(ram.split(" : ")[1].split()[0]) <= {"=", "-"}, ram)
 
     def test_many_disks_and_interfaces_stay_bounded(self):
         f = self.fixture()
         f.command("df", "Filesystem 1024-blocks Used Available Capacity Mounted on\n"
-                  + "".join(f"/dev/d{i} 1048576 800000 100000 90% /disk{i}\n" for i in range(100)))
+                  + "".join(f"/dev/d{i} 1048576 800000 100000 96% /disk{i}\n" for i in range(100)))
         f.command("ip", "".join(f"{i+1}: eth{i}: <UP> state UP\n    inet 10.0.0.{i+1}/24\n" for i in range(100)))
         text = self.table(f.run())
-        self.assertIn("+97 other filesystems (97 warnings, 97 critical)", text)
-        self.assertIn("+98 other interfaces", text)
-        self.assertLessEqual(len(text.splitlines()), 23)
+        self.assertLessEqual(len(text.splitlines()), 17)
+        self.assertIn("(+97)", self.line(text, "Warning"))
+        self.assertEqual(self.line(text, "IP").count("eth"), 3)
 
-    def test_all_interfaces_keeps_disks_compact(self):
-        text = self.table(self.fixture().run("--all-interfaces"))
-        self.assertIn("172.17.0.1 [Docker]", text)
-        self.assertIn("| wlan0", text)
-        self.assertIn("other filesystems", text)
-
-    def test_hidden_critical_disks_are_colored_too(self):
+    def test_virtual_interfaces_hidden_unless_requested(self):
         f = self.fixture()
-        f.command("df", DISKS.replace("81% /extra", "91% /extra").replace("84% /backup", "95% /backup"))
-        p = f.run("--color")
-        self.table(p)
-        line = next(line for line in p.stdout.splitlines() if "other filesystems" in line)
-        self.assertIn("\x1b[31m", line)
-        self.assertIn("1 critical", line)
+        f.command("ip", IP + "8: flannel.1: <UP> state UNKNOWN\n    inet 10.42.0.0/32\n")
+        self.assertNotIn("flannel", self.table(f.run()))
+        text = self.table(f.run("--all-interfaces"))
+        self.assertIn("172.17.0.1", text)
+        self.assertIn("wlan0", text)
+
+    def test_container_and_readonly_mounts_skipped(self):
+        f = self.fixture()
+        with f.files["/proc/self/mounts"].open("a") as mounts:
+            mounts.write("/dev/k /var/lib/kubelet/pods/x ext4 rw 0 0\n/dev/m /usr/lib/modules ext4 rw 0 0\n"
+                         "/dev/h /usr/src/h overlay ro,relatime 0 0\n/dev/d /data ext4 rw 0 0\n")
+        self.table(f.run())
+        df = next(line for line in f.log.read_text().splitlines() if line.startswith("df:"))
+        self.assertEqual(df, "df:-kP / /data")
 
     def test_macos_metrics_and_default_interface(self):
         f = self.fixture("Darwin")
         text = self.table(f.run())
-        self.assertIn("macOS 15.0 / arm64", text)
-        self.assertIn("Apple M2", text)
+        self.assertIn("macOS 15.0, arm64", text)
+        self.assertIn("8 x Apple M2", text)
         self.assertIn("2d 4h 4m", text)
-        self.assertIn("8.0 GiB / 16.0 GiB", text)
-        self.assertIn("256.0 MiB / 1.0 GiB", text)
-        self.assertLess(text.index("| en0"), text.index("| en1"))
+        self.assertIn("8.0G / 16.0G", text)
+        self.assertIn("256.0M / 1.0G", text)
+        ip = self.line(text, "IP")
+        self.assertLess(ip.index("en0"), ip.index("en1"))
         self.assertIn("df:-kPl", f.log.read_text())
 
     def test_macos_intel_and_cpu_model_fallback(self):
@@ -229,9 +250,16 @@ class SysinfoTests(unittest.TestCase):
         f.command("uname", "Darwin server 24.0.0 x86_64\n")
         f.command("sysctl", "hw.ncpu: 4\nhw.model: MacBookPro11,1\n")
         text = self.table(f.run())
-        self.assertIn("macOS 15.0 / x86_64", text)
-        self.assertIn("4 logical CPUs / MacBookPro11,1", text)
-        self.assertRegex(text, r"\| RAM +\| N/A")
+        self.assertIn("macOS 15.0, x86_64", text)
+        self.assertIn("4 x MacBookPro11,1", text)
+        self.assertRegex(self.line(text, "RAM"), r": N/A")
+
+    def test_cpu_model_is_cleaned(self):
+        f = self.fixture()
+        f.files["/proc/cpuinfo"].write_text("processor : 0\nmodel name : Intel(R) Core(TM) i5-10400 CPU @ 2.90GHz\n"
+                                            "processor : 1\nprocessor : 2\nprocessor : 3\n")
+        f.env["LANG"] = "C.UTF-8"
+        self.assertIn("4 \u00d7 Intel Core i5-10400 @ 2.90GHz", self.line(self.table(f.run()), "CPU"))
 
     def test_openwrt_ifconfig_and_old_kernel_memory_fallback(self):
         f = self.fixture()
@@ -246,7 +274,7 @@ class SysinfoTests(unittest.TestCase):
                   "          inet addr:192.168.1.1  Bcast:192.168.1.255\n")
         text = self.table(f.run())
         self.assertIn("OpenWrt 24.10", text)
-        self.assertIn("144.0 MiB / 256.0 MiB", text)
+        self.assertIn("144.0M / 256.0M", text)
         self.assertIn("192.168.1.1", text)
         df = next(line for line in f.log.read_text().splitlines() if line.startswith("df:"))
         self.assertNotIn("/rom", df)
