@@ -90,33 +90,35 @@ dashed separators:
 ```
 --------------------------------------------------------
 Hostname   : dd.goldfinches.ru
-OS         : Debian GNU/Linux 12 (bookworm), x86_64
-Kernel     : 6.1.0-52-amd64
+OS         : Debian GNU/Linux 12 (bookworm), x86_64, 6.1.0-52-amd64
 CPU        : 4 × Intel Core i5-10400 @ 2.90GHz
-Uptime     : 6d 23h 31m  load 0.39, 0.75, 0.76
+Uptime     : 6d 23h 37m
+Load       : 0.17, 0.49, 0.65
 --------------------------------------------------------
-RAM        : █████████████████▎──  86%    8.3G / 9.7G
-Swap       : █████▍──────────────  27%    1.1G / 4.0G
-/          : ███████████████─────  75%    34.8G / 49.0G
-/mnt/hdd   : ███████████████████─  95% !  87.4G / 97.9G
-/mnt/iscsi : ███████████▎────────  56%    76.3G / 143.6G
+RAM        : █████████████████░░░  84%    8.1G / 9.7G
+Swap       : █████░░░░░░░░░░░░░░░  27%    1.1G / 4.0G
+
+/          : ███████████████░░░░░  75%    34.8G / 49.0G
+/mnt/hdd   : ███████████████████░  95% !  87.4G / 97.9G
+/mnt/iscsi : ███████████░░░░░░░░░  56%    76.3G / 143.6G
 --------------------------------------------------------
-IP         : 10.0.0.118 ens160
-Warning    : disk >= 95%: /mnt/hdd 95%
+IP         : ens160 10.0.0.118
 --------------------------------------------------------
 ```
 
+- OS line also carries the architecture and kernel; load average has its own line.
 - CPU model is cleaned of `(R)`, `(TM)` and the word `CPU`.
-- RAM, swap and up to four local filesystems (root first, then the fullest).
+- RAM and swap, then (after a blank line) up to four local filesystems (root first, then the fullest).
   Container/kubelet bind mounts, `/run`, WSL helper mounts and read-only
   images are skipped. `--details` shows every filesystem.
-- IP: up to three IPv4 addresses with interface names, default route first.
+- IP: up to three `interface address` pairs, default route first.
   Docker and overlay interfaces (`docker*`, `br-<hex>`, `veth*`, `flannel*`,
   `cni*`, `cali*`, `vxlan*`, ...) are hidden unless `--all-interfaces`.
 
-Bars use Unicode blocks with eighth-step precision when the locale is UTF-8 and
-fall back to ASCII (`=`/`-`) otherwise. Colors: green below **80%**, yellow from
-80%, red with `!` from **95%**; any filesystem at 95%+ also gets a `Warning` line.
+Bars use full blocks `█` with a dim `░` remainder when the locale is UTF-8 (no
+fractional blocks: they render unevenly in many fonts) and fall back to ASCII
+(`=`/`-`) otherwise. Colors: green below **80%**, yellow from 80%, red with `!`
+from **95%**.
 Percentages come from `df`, accounting for available space and filesystem
 reserves, rather than being recomputed from rounded display sizes.
 

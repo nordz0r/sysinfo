@@ -135,7 +135,7 @@ class SysinfoTests(unittest.TestCase):
         lines = ANSI.sub("", result.stdout).splitlines()
         self.assertTrue(lines)
         self.assertTrue(set(lines[0]) == {"-"} and lines[-1] == lines[0], lines)
-        self.assertTrue(all(" : " in line for line in lines if set(line) != {"-"}), lines)
+        self.assertTrue(all(" : " in line for line in lines if line and set(line) != {"-"}), lines)
         self.assertNotIn("+-", "".join(lines))  # No table borders.
         return "\n".join(lines)
 
@@ -146,7 +146,7 @@ class SysinfoTests(unittest.TestCase):
         for shell in ("/bin/sh", "/bin/bash"):
             p = subprocess.run([shell, str(COMMON)], capture_output=True, text=True, timeout=10)
             text = self.table(p)
-            for label in ("Hostname", "OS", "Kernel", "CPU", "Uptime", "RAM", "IP"):
+            for label in ("Hostname", "OS", "CPU", "Uptime", "RAM", "IP"):
                 self.line(text, label)
             self.assertNotIn("\x1b", p.stdout)
 
@@ -154,15 +154,20 @@ class SysinfoTests(unittest.TestCase):
         f = self.fixture()
         text = self.table(f.run())
         lines = text.splitlines()
-        self.assertLessEqual(len(lines), 16)
+        self.assertLessEqual(len(lines), 17)
         self.assertIn("2 x Fixture", self.line(text, "CPU"))
-        self.assertIn("2d 4h 4m  load 0.10, 0.20, 0.30", self.line(text, "Uptime"))
+        self.assertIn("2d 4h 4m", self.line(text, "Uptime"))
+        self.assertIn("0.10, 0.20, 0.30", self.line(text, "Load"))
+        self.assertIn("Debian GNU/Linux 13, x86_64, 24.0.0", self.line(text, "OS"))
+        self.assertNotIn("Kernel", text)
+        self.assertEqual(lines[lines.index(self.line(text, "Swap")) + 1], "")  # gap before disks
         mounts = [l.split(" :")[0].strip() for l in lines if l.startswith("/")]
         self.assertEqual(mounts, ["/", "/data", "/backup", "/extra"])  # root first, then fullest.
         self.assertIn("70%", self.line(text, "/"))  # df capacity, not used/total = 50%.
         self.assertNotIn("other", text)
         ip = self.line(text, "IP")
         self.assertLess(ip.index("br-lan"), ip.index("eth0"))
+        self.assertIn("br-lan 10.0.0.1, eth0 192.168.1.20", ip)
         self.assertNotIn("172.17.0.1", text)
         self.assertNotIn("Warning", text)
         commands = f.log.read_text().splitlines()
@@ -192,7 +197,7 @@ class SysinfoTests(unittest.TestCase):
             self.assertIn(f"{pct}%", line)
         self.assertIn("95% !", text)
         self.assertNotIn("94% !", text)
-        self.assertIn("disk >= 95%: /d3 95%", self.line(text, "Warning"))
+        self.assertNotIn("Warning", text)
 
     def test_unicode_bars_and_ascii_fallback(self):
         f = self.fixture()
@@ -200,6 +205,8 @@ class SysinfoTests(unittest.TestCase):
         text = self.table(f.run())
         ram = self.line(text, "RAM")
         self.assertIn("\u2588", ram)
+        self.assertIn("\u2591", ram)
+        self.assertFalse(set(ram) & set("\u258f\u258e\u258d\u258c\u258b\u258a\u2589\u2500"), ram)
         self.assertNotIn("[", ram)
         self.assertNotIn("#", ram)
         f.env["LANG"] = "C"
@@ -213,7 +220,7 @@ class SysinfoTests(unittest.TestCase):
         f.command("ip", "".join(f"{i+1}: eth{i}: <UP> state UP\n    inet 10.0.0.{i+1}/24\n" for i in range(100)))
         text = self.table(f.run())
         self.assertLessEqual(len(text.splitlines()), 17)
-        self.assertIn("(+97)", self.line(text, "Warning"))
+        self.assertNotIn("Warning", text)
         self.assertEqual(self.line(text, "IP").count("eth"), 3)
 
     def test_virtual_interfaces_hidden_unless_requested(self):
@@ -236,7 +243,7 @@ class SysinfoTests(unittest.TestCase):
     def test_macos_metrics_and_default_interface(self):
         f = self.fixture("Darwin")
         text = self.table(f.run())
-        self.assertIn("macOS 15.0, arm64", text)
+        self.assertIn("macOS 15.0, arm64, 24.0.0", text)
         self.assertIn("8 x Apple M2", text)
         self.assertIn("2d 4h 4m", text)
         self.assertIn("8.0G / 16.0G", text)
@@ -250,7 +257,7 @@ class SysinfoTests(unittest.TestCase):
         f.command("uname", "Darwin server 24.0.0 x86_64\n")
         f.command("sysctl", "hw.ncpu: 4\nhw.model: MacBookPro11,1\n")
         text = self.table(f.run())
-        self.assertIn("macOS 15.0, x86_64", text)
+        self.assertIn("macOS 15.0, x86_64, 24.0.0", text)
         self.assertIn("4 x MacBookPro11,1", text)
         self.assertRegex(self.line(text, "RAM"), r": N/A")
 

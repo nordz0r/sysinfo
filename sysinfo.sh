@@ -216,9 +216,8 @@ function level(p) { return p>=95?"31":(p>=80?"33":"32") }
 function bar(p,c, e,n,f,part) {
     p=p<0?0:(p>100?100:p)
     if(!utf8) { n=int(p*BW/100+0.5); return paint(repeat("=",n),c) paint(repeat("-",BW-n),"2") }
-    e=int(p*BW*8/100+0.5); n=int(e/8); f=e%8
-    part=f?substr(EIGHTHS,(f-1)*3+1,3):""
-    return paint(repeat("\342\226\210",n) part,c) paint(repeat("\342\224\200",BW-n-(f?1:0)),"2")
+    n=int(p*BW/100+0.5)
+    return paint(repeat("\342\226\210",n),c) paint(repeat("\342\226\221",BW-n),"2")
 }
 function human(k) { if(k>=1073741824) return sprintf("%.1fT",k/1073741824); if(k>=1048576) return sprintf("%.1fG",k/1048576); if(k>=1024) return sprintf("%.1fM",k/1024); return sprintf("%.0fK",k) }
 function resource(k,used,total,p, c) {
@@ -271,7 +270,7 @@ function linux_stats( line,a,key,value,free_mem,cache,available,model) {
     }
     close("/proc/net/route")
 }
-BEGIN { esc=sprintf("%c",27); EIGHTHS="\342\226\217\342\226\216\342\226\215\342\226\214\342\226\213\342\226\212\342\226\211"; if(os_type=="Linux") linux_stats() }
+BEGIN { esc=sprintf("%c",27); if(os_type=="Linux") linux_stats() }
 /^\[[A-Z]+\]$/ { mode=$0; if(mode=="[DISKERROR]") disk_error=1; if(mode=="[NETERROR]") net_error=1; next }
 mode=="[OS]" { os="macOS " $0; next }
 mode=="[MACSYS]" {
@@ -324,14 +323,15 @@ END {
     BW=20; W=L+3+BW+7+16
     rule()
     row("Hostname",host)
-    row("OS",os ", " arch)
-    row("Kernel",kernel,"35")
+    row("OS",paint(os ", " arch ", ","36") paint(kernel,"35"),"raw")
     c=cleancpu(cpu); row("CPU",(cpus?cpus (utf8?" \303\227 ":" x "):"") (c!=""?c:(cpus?"":"N/A")))
     up=seconds!="" ? sprintf("%dd %dh %dm",int(seconds/86400),int(seconds%86400/3600),int(seconds%3600/60)) : "N/A"
-    row("Uptime",up (load!=""?"  load " load:""))
+    row("Uptime",up)
+    if(load!="") row("Load",load)
     rule()
     if(mem_total>0) resource("RAM",mem_used,mem_total,percent(mem_used,mem_total)); else row("RAM","N/A")
     if(swap_total>0) resource("Swap",swap_total-swap_free,swap_total,percent(swap_total-swap_free,swap_total)); else row("Swap","off","2")
+    print ""
     limit=details?ndisks:4; count=0
     if(root_disk) { selected[root_disk]=1; count=1 }
     while(count<limit && count<ndisks) {
@@ -344,23 +344,19 @@ END {
         if(best) { resource(disk_mount[best],disk_used[best],disk_total[best],disk_pct[best]); printed[best]=1 }
     }
     if(!ndisks) row("Disks",disk_error?"unavailable":"no local filesystems","2")
-    crit=""; ncrit=0
-    for(i=1;i<=ndisks;i++) if(disk_pct[i]>=95) { ncrit++; if(ncrit<=3) crit=crit (crit?", ":"") disk_mount[i] " " disk_pct[i] "%" }
-    if(ncrit>3) crit=crit " (+" (ncrit-3) ")"
-    if(disk_error) crit=crit (crit?"; ":"") "incomplete disk data"
+    if(disk_error) row("Disks","incomplete disk data","33")
     rule()
     count=0; ips=""
     if(default_iface in net_addr && (all_interfaces || !docker(default_iface))) {
-        ips=paint(net_addr[default_iface],"35") " " paint(default_iface,"2"); net_printed[default_iface]=1; count++
+        ips=paint(default_iface,"2") " " paint(net_addr[default_iface],"35"); net_printed[default_iface]=1; count++
     }
     for(i=1;i<=nnets;i++) {
         name=net_name[i]; if(net_printed[name] || (!all_interfaces && virtual(name))) continue
         if(!all_interfaces && count>=3) break
-        ips=ips (ips?", ":"") paint(net_addr[name],"35") " " paint(name,"2"); count++
+        ips=ips (ips?", ":"") paint(name,"2") " " paint(net_addr[name],"35"); count++
     }
     if(!count) row("IP",net_error?"unavailable (install iproute2)":"no active IPv4","2")
     else row("IP",ips,"raw")
-    if(crit!="") row("Warning","disk >= 95%: " crit,"1;31")
     rule()
     if(disk_error) exit 1
 }'
