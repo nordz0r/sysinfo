@@ -170,7 +170,14 @@ collect() {
         # Supply only local mount points: BusyBox df has no portable -l option.
         set --
         sources='|'
+        # OpenWrt: hide the overlay upper dir (same space as /), keep /tmp tmpfs.
+        overlay_upper=
+        openwrt=0
+        [ -s /etc/openwrt_release ] && openwrt=1
         if [ -r /proc/self/mounts ]; then
+            while read -r source mount rest; do
+                case "$source" in overlayfs:/*) overlay_upper=${source#overlayfs:} ;; esac
+            done < /proc/self/mounts
             while read -r source mount type opts rest; do
                 # Container/kubelet bind mounts duplicate real disks and are often unreadable.
                 case "$mount" in
@@ -178,6 +185,10 @@ collect() {
                 esac
                 # Read-only images (WSL headers/modules, squashfs) are always "full".
                 case "$mount,$opts" in /,*) ;; *,ro|*,ro,*) continue ;; esac
+                if [ -n "$overlay_upper" ] && [ "$mount" = "$overlay_upper" ]; then continue; fi
+                if [ "$openwrt" = 1 ] && [ "$type" = tmpfs ] && [ "$mount" = /tmp ]; then
+                    sources="$sources$source|"; set -- "$@" "$mount"; continue
+                fi
                 case "$type" in
                     ext2|ext3|ext4|xfs|btrfs|zfs|overlay|f2fs|jffs2|ubifs|ufs|vfat|msdos|exfat|ntfs|ntfs3|fuseblk)
                         case "$sources" in *"|$source|"*) continue ;; esac
@@ -243,10 +254,17 @@ function linux_stats( line,a,key,value,free_mem,cache,available,model) {
     while((getline line < "/proc/cpuinfo")>0) {
         split(line,a,":"); key=trim(a[1]); value=trim(a[2])
         if(key=="processor") cpus++
+        if(key=="CPU implementer" && implementer=="") implementer=value
+        if(key=="CPU part" && part=="") part=value
         if((key=="model name" || key=="cpu model") && cpu=="") cpu=value
         if((key=="Hardware" || key=="Processor" || key=="system type" || key=="machine") && model=="") model=value
     }
-    close("/proc/cpuinfo"); if(cpu=="") cpu=model
+    close("/proc/cpuinfo")
+    if(cpu=="" && implementer=="0x41" && (part in ARM)) cpu="ARM " ARM[part]
+    board=""; if((getline line < "/tmp/sysinfo/model")>0) { board=line; sub(/ *\(.*\)$/,"",board) }
+    close("/tmp/sysinfo/model")
+    if(cpu=="") cpu=model!=""?model:board
+    else if(board!="" && board!=cpu) cpu=cpu ", " board
     while((getline line < "/proc/meminfo")>0) {
         split(line,a,/[ \t]+/); key=a[1]; value=a[2]+0
         if(key=="MemTotal:") mem_total=value
@@ -270,7 +288,8 @@ function linux_stats( line,a,key,value,free_mem,cache,available,model) {
     }
     close("/proc/net/route")
 }
-BEGIN { esc=sprintf("%c",27); if(os_type=="Linux") linux_stats() }
+BEGIN { narm=split("0xc05 Cortex-A5 0xc07 Cortex-A7 0xc09 Cortex-A9 0xc0f Cortex-A15 0xd03 Cortex-A53 0xd04 Cortex-A35 0xd05 Cortex-A55 0xd07 Cortex-A57 0xd08 Cortex-A72 0xd09 Cortex-A73 0xd0b Cortex-A76",armt," "); for(i=1;i<narm;i+=2) ARM[armt[i]]=armt[i+1]
+    esc=sprintf("%c",27); if(os_type=="Linux") linux_stats() }
 /^\[[A-Z]+\]$/ { mode=$0; if(mode=="[DISKERROR]") disk_error=1; if(mode=="[NETERROR]") net_error=1; next }
 mode=="[OS]" { os="macOS " $0; next }
 mode=="[MACSYS]" {

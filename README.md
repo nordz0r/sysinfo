@@ -177,3 +177,22 @@ awk 'BEGIN { print "sysinfo_payload=" } /^sysinfo_payload=\$\(cat/ { body=1; nex
 ## License
 
 MIT, see [LICENSE](LICENSE).
+
+## OpenWrt
+
+BusyBox `ash`/`awk`/`df`/`ip` are enough; nothing to install. On OpenWrt the
+overlay upper dir (`/overlay`, same space as `/`) is hidden, `/tmp` (tmpfs) is
+shown, ARM CPUs are named from `CPU part` (e.g. `ARM Cortex-A53`) plus the board
+from `/tmp/sysinfo/model`.
+
+Offline-safe autostart for interactive logins only (keeps `scp`/`ssh host cmd` clean):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/nordz0r/sysinfo/master/sysinfo.sh -o /usr/bin/sysinfo
+chmod 755 /usr/bin/sysinfo
+cat > /etc/profile.d/90-sysinfo.sh <<'X'
+case $- in *i*) [ -t 1 ] && [ -x /usr/bin/sysinfo ] && /usr/bin/sysinfo ;; esac
+X
+printf '%s\n' /usr/bin/sysinfo /etc/profile.d/90-sysinfo.sh >> /etc/sysupgrade.conf
+```
+
