@@ -1,23 +1,50 @@
-# sysinfo
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset=".github/assets/banner-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset=".github/assets/banner-light.svg">
+    <img alt="nordz0r/sysinfo — сводка о системе Linux" src=".github/assets/banner-light.svg" width="100%">
+  </picture>
+</p>
 
-Get Info v.1 and v.2
+<p align="center"><b>Русский</b> · <a href="README.en.md">English</a></p>
 
-## Version 1 (Original)
-Usage (curl): curl -Lso- https://raw.githubusercontent.com/nordz0r/sysinfo/master/sysinfo.sh | bash
+<p align="center">
+  <img alt="bash" src="https://img.shields.io/badge/bash-script-4eaa25?style=flat-square&logo=gnubash&logoColor=white">
+  <img alt="OpenWrt" src="https://img.shields.io/badge/OpenWrt%2FBusyBox-v2-00b5e2?style=flat-square">
+  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue?style=flat-square"></a>
+</p>
 
-Usage (wget): wget -qO- https://raw.githubusercontent.com/nordz0r/sysinfo/master/sysinfo.sh | bash
+Скрипт на bash, который одной командой выводит сводку о машине: hostname, модель и число ядер CPU, частоту, объём и занятость диска, RAM и swap, uptime, load average, ОС, архитектуру, ядро и IP-адреса.
 
-## Version 2 (Backward Compatible)
-Improved version with better compatibility for embedded systems like OpenWRT/BusyBox.
+## Использование
 
-Usage (curl): curl -Lso- https://raw.githubusercontent.com/nordz0r/sysinfo/master/sysinfo_v2.sh | bash
+Версия 1 (исходная):
 
-Usage (wget): wget -qO- https://raw.githubusercontent.com/nordz0r/sysinfo/master/sysinfo_v2.sh | bash
+```bash
+curl -Lso- https://raw.githubusercontent.com/nordz0r/sysinfo/master/sysinfo.sh | bash
+# или
+wget -qO- https://raw.githubusercontent.com/nordz0r/sysinfo/master/sysinfo.sh | bash
+```
 
-### Changes in v2:
-- Fallback logic for hostname if /etc/hostname doesn't exist
-- Alternative load average collection when 'w' command is unavailable
-- CPU bitness detection without 'getconf' command
-- Fixed 'df' command for BusyBox compatibility (removed -l option)
-- Command availability checks before usage
-- Improved IP detection
+Версия 2 (обратно совместимая, для встраиваемых систем вроде OpenWrt/BusyBox):
+
+```bash
+curl -Lso- https://raw.githubusercontent.com/nordz0r/sysinfo/master/sysinfo_v2.sh | bash
+# или
+wget -qO- https://raw.githubusercontent.com/nordz0r/sysinfo/master/sysinfo_v2.sh | bash
+```
+
+Нужен `curl` или `wget`. Перед запуском через `| bash` просмотрите скрипт.
+
+### Изменения в v2
+
+- Запасной способ получить hostname, если нет `/etc/hostname`
+- Альтернативный сбор load average, когда нет команды `w`
+- Определение разрядности CPU без `getconf`
+- `df` совместим с BusyBox (убран ключ `-l`)
+- Проверка наличия команд перед использованием
+- Улучшено определение IP
+
+## Лицензия
+
+MIT, см. [LICENSE](LICENSE).

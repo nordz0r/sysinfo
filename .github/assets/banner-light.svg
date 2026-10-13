@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="400" viewBox="0 0 1280 400" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">
+<defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ffffff"/><stop offset="1" stop-color="#f3f5f8"/></linearGradient>
+<pattern id="d" width="24" height="24" patternUnits="userSpaceOnUse"><circle cx="2" cy="2" r="1.2" fill="#57606a" fill-opacity="0.25"/></pattern></defs>
+<rect width="1280" height="400" rx="16" fill="url(#g)"/><rect width="1280" height="400" rx="16" fill="url(#d)"/>
+<text x="80" y="130.0" font-size="22" fill="#0969da" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">nordz0r/sysinfo</text>
+<text x="80" y="190.0" font-size="58" font-weight="700" fill="#1f2328">sysinfo</text>
+<text x="80" y="232.0" font-size="22" fill="#57606a">One-line Linux system summary: CPU, RAM, disk, uptime, OS, IPs</text>
+<rect x="80" y="270.0" width="80" height="36" rx="18" fill="#eef1f4" stroke="#0969da" stroke-opacity="0.45"/><text x="120.0" y="294.0" text-anchor="middle" font-size="18" fill="#1f2328">bash</text>
+<rect x="172" y="270.0" width="157" height="36" rx="18" fill="#eef1f4" stroke="#0969da" stroke-opacity="0.45"/><text x="250.5" y="294.0" text-anchor="middle" font-size="18" fill="#1f2328">curl | bash</text>
+<rect x="341" y="270.0" width="113" height="36" rx="18" fill="#eef1f4" stroke="#0969da" stroke-opacity="0.45"/><text x="397.5" y="294.0" text-anchor="middle" font-size="18" fill="#1f2328">OpenWrt</text>
+<rect x="466" y="270.0" width="113" height="36" rx="18" fill="#eef1f4" stroke="#0969da" stroke-opacity="0.45"/><text x="522.5" y="294.0" text-anchor="middle" font-size="18" fill="#1f2328">BusyBox</text>
+</svg>
