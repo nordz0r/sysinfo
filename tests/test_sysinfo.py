@@ -286,6 +286,23 @@ class SysinfoTests(unittest.TestCase):
         df = next(line for line in f.log.read_text().splitlines() if line.startswith("df:"))
         self.assertNotIn("/rom", df)
 
+    def test_openwrt_overlay_tmp_and_arm_cpu(self):
+        f = self.fixture()
+        f.files["/etc/openwrt_release"].write_text("DISTRIB_DESCRIPTION='OpenWrt 24.10.5'\n")
+        f.files["/proc/cpuinfo"].write_text("processor\t: 0\nCPU implementer\t: 0x41\nCPU part\t: 0xd03\n"
+                                            "processor\t: 1\nCPU implementer\t: 0x41\nCPU part\t: 0xd03\n")
+        f.files["/etc/os-release"].write_text("")
+        f.files["/proc/self/mounts"].write_text(
+            "/dev/root /rom squashfs ro,relatime 0 0\ntmpfs /tmp tmpfs rw,nosuid 0 0\n"
+            "/dev/ubi0_2 /overlay ubifs rw,noatime 0 0\n"
+            "overlayfs:/overlay / overlay rw,noatime,lowerdir=/,upperdir=/overlay/upper 0 0\n"
+            "tmpfs /dev tmpfs rw 0 0\n/dev/sda1 /mnt/usb ext4 rw 0 0\n")
+        text = self.table(f.run())
+        self.assertIn("OpenWrt 24.10.5", self.line(text, "OS"))
+        self.assertIn("2 x ARM Cortex-A53", self.line(text, "CPU"))
+        df = next(line for line in f.log.read_text().splitlines() if line.startswith("df:"))
+        self.assertEqual(df, "df:-kP /tmp / /mnt/usb")  # no /rom, /overlay or /dev
+
     def test_no_downloader_suggests_install_but_local_metrics_work(self):
         f = self.fixture()
         (f.bin / "curl").unlink()
