@@ -50,46 +50,68 @@ wget -qO- https://raw.githubusercontent.com/nordz0r/sysinfo/master/sysinfo.sh | 
 
 ### Вариант А — с GitHub, по умолчанию
 
-Выполните этот блок один раз в Bash. Он добавит в `~/.bashrc` одну строку
-с проверкой дублирования. Локальная установка скрипта не требуется.
+Выполните один раз. Команда настроит `~/.bashrc`, заменив старые записи sysinfo
+одним блоком с кратким описанием и ссылкой на репозиторий. Скрипт локально
+не устанавливается.
 
 ```bash
-sysinfo_hook=$(cat <<'SYSINFO_BASHRC' | tr '\n' ' '
-case $- in
-  *i*) if [ -t 0 ] && [ -t 1 ]; then (
-    sysinfo_url=https://raw.githubusercontent.com/nordz0r/sysinfo/master/sysinfo.sh;
-    if command -v curl >/dev/null 2>&1; then
-      sysinfo_code=$(curl -fsSL --connect-timeout 2 --max-time 5 "$sysinfo_url") || exit;
-    elif command -v wget >/dev/null 2>&1; then
-      sysinfo_args=(-qO- -T5);
-      if wget --help 2>&1 | grep -q -- --tries; then sysinfo_args+=(-t1); fi;
-      sysinfo_code=$(wget "${sysinfo_args[@]}" "$sysinfo_url") || exit;
-    else
-      printf '%s\n' 'sysinfo: install curl or wget for GitHub startup.' >&2; exit 1;
-    fi;
-    [ -n "$sysinfo_code" ] && "$BASH" -c "$sysinfo_code" sysinfo.sh --interactive-only;
-  ) || :; fi ;;
-esac
-SYSINFO_BASHRC
-)
-grep -qxF "$sysinfo_hook" "$HOME/.bashrc" 2>/dev/null || printf '\n%s\n' "$sysinfo_hook" >> "$HOME/.bashrc"
+curl -fsSL https://raw.githubusercontent.com/nordz0r/sysinfo/master/sysinfo.sh | bash -s -- --setup-bash
 ```
 
-При каждом интерактивном запуске Bash загружается актуальный `sysinfo.sh`
-из GitHub и выполняется из памяти. Файл скрипта не сохраняется. В первую очередь
-используется `curl`, при его отсутствии — `wget`; если нет обоих,
-выводится подсказка по установке.
+Если есть только `wget`:
+
+```bash
+wget -qO- https://raw.githubusercontent.com/nordz0r/sysinfo/master/sysinfo.sh | bash -s -- --setup-bash
+```
+
+При каждом интерактивном запуске Bash актуальный `sysinfo.sh` загружается
+из GitHub и выполняется из памяти. В первую очередь используется `curl`,
+при его отсутствии — `wget`; если нет обоих, выводится подсказка по установке.
 
 Загрузка начинается только в интерактивном Bash, когда stdin и stdout подключены
 к терминалу. Полученный скрипт дополнительно проверяет это через `--interactive-only`.
 Так автозапуск не мешает `ssh host command`, `scp`, cron и перенаправлению вывода.
-
 `curl` получает общий таймаут 5 секунд; `wget` — таймаут ожидания 5 секунд
-и одну попытку, если поддерживает соответствующий параметр. При неудачной или
-пустой загрузке скрипт не выполняется, вход в Bash продолжается.
+и одну попытку, если поддерживает соответствующий параметр.
+При неудачной или пустой загрузке вход в Bash продолжается.
 
-Если уже добавляли старую строку автозапуска sysinfo, замените её новой.
-Используйте один из вариантов А/Б, чтобы избежать двойного вывода.
+#### Через прокси
+
+Укажите прокси и для первой загрузки, и для будущего автозапуска:
+
+```bash
+sysinfo_proxy='http://deb-proxy.lan:3128'
+curl -fsSL --proxy "$sysinfo_proxy" https://raw.githubusercontent.com/nordz0r/sysinfo/master/sysinfo.sh | bash -s -- --setup-bash --proxy "$sysinfo_proxy"
+```
+
+Адрес из `--proxy` сохраняется в блоке автозапуска и применяется как к `curl`,
+так и к `wget`. При повторной настройке передавайте этот параметр снова;
+без него используются обычные настройки прокси из окружения.
+Для совместимости с обоими загрузчиками используйте `http://`-прокси;
+адрес `https://` требует `curl`.
+Для первой загрузки через `wget` задайте `https_proxy` и `http_proxy`:
+
+```bash
+sysinfo_proxy='http://deb-proxy.lan:3128'
+https_proxy="$sysinfo_proxy" http_proxy="$sysinfo_proxy" wget -qO- https://raw.githubusercontent.com/nordz0r/sysinfo/master/sysinfo.sh | bash -s -- --setup-bash --proxy "$sysinfo_proxy"
+```
+
+#### Переход со старого автозапуска
+
+Команда убирает прежние отдельные вызовы `curl`/`wget` для этого репозитория,
+включая `sysinfo_v2.sh` и параметры прокси, старые локальные вызовы и блоки,
+созданные предыдущей настройкой. Комментарий `# by NorD` непосредственно
+перед удаляемой строкой также убирается. Остальные настройки сохраняются.
+Если старый вызов использовал прокси, укажите его через `--proxy`.
+
+Перед первым изменением существующий профиль сохраняется в
+`~/.bashrc.sysinfo.bak`; последующие настройки эту копию не перезаписывают.
+Повторный запуск не создаёт дубли. Перед заменой проверяется синтаксис Bash.
+Если старый вызов встроен в сложную конструкцию, которую нельзя однозначно
+заменить, команда оставляет профиль без изменений и сообщает об этом.
+Символьные ссылки вместо `.bashrc` также остаются без изменений.
+Чтобы отключить автозапуск, удалите блок между `# >>> sysinfo >>>` и
+`# <<< sysinfo <<<` включительно.
 
 <details>
 <summary><strong>Вариант Б — локальная установка для офлайн-сценария</strong></summary>
@@ -105,11 +127,11 @@ curl -fsSL https://raw.githubusercontent.com/nordz0r/sysinfo/master/sysinfo.sh |
 Собственная копия обновляется атомарно; посторонние файлы и символьные ссылки
 в целевом пути сохраняются. Установка не редактирует профиль оболочки.
 
-Для автозапуска локальной копии добавьте отдельную строку вместо варианта А:
+Для автозапуска локальной копии настройте тот же блок в офлайн-режиме
+(он заменит вариант А и старые записи):
 
 ```bash
-sysinfo_local_hook='case $- in *i*) [ ! -x "$HOME/.local/bin/sysinfo.sh" ] || "$HOME/.local/bin/sysinfo.sh" --interactive-only ;; esac'
-grep -qxF "$sysinfo_local_hook" "$HOME/.bashrc" 2>/dev/null || printf '\n%s\n' "$sysinfo_local_hook" >> "$HOME/.bashrc"
+"$HOME/.local/bin/sysinfo.sh" --setup-bash --local
 ```
 
 Ручной запуск и удаление:
@@ -131,6 +153,9 @@ grep -qxF "$sysinfo_local_hook" "$HOME/.bashrc" 2>/dev/null || printf '\n%s\n' "
 | --- | --- |
 | `--install` | Создать или обновить `~/.local/bin/sysinfo.sh`. |
 | `--uninstall` | Удалить установленную копию. |
+| `--setup-bash` | Настроить автозапуск с GitHub в `~/.bashrc`, заменив старые записи sysinfo. |
+| `--proxy URL` | Сохранить HTTP(S)-прокси для `--setup-bash`. |
+| `--local` | Вместе с `--setup-bash` запускать установленную локальную копию. |
 | `--interactive-only` | Выводить сводку только при stdin/stdout, подключённых к терминалу. |
 | `--details` | Показать все выбранные локальные файловые системы и IPv4-интерфейсы. |
 | `--all-interfaces` | Показать все IPv4-интерфейсы, включая виртуальные. |
@@ -165,6 +190,7 @@ grep -qxF "$sysinfo_local_hook" "$HOME/.bashrc" 2>/dev/null || printf '\n%s\n' "
 Базовые зависимости — `sh`, `cat`, `uname`, `awk`, `df`. Для установки нужны
 `mkdir`, `mktemp`, `chmod`, `mv` и `rm`. Локальный запуск не требует `curl`/`wget`;
 при отсутствии обоих скрипт подсказывает команду установки загрузчика.
+Для `--setup-bash` дополнительно нужны Bash, `cp`, `cmp` и `mktemp`.
 
 На OpenWrt `/overlay` не дублирует корневую файловую систему, `/tmp` показывается
 отдельно, неизменяемый squashfs пропускается. Штатный `ash` не читает `~/.bashrc`:
@@ -193,8 +219,8 @@ python3 -m unittest discover -s tests -v
 ```
 
 Тесты проверяют Linux, образцы macOS/OpenWrt, интерактивный Bash с терминалом,
-молчаливый неинтерактивный запуск, повторную установку и удаление, сохранность
-профилей и поведение при отказах записи.
+молчаливый неинтерактивный запуск, повторную установку и удаление, миграцию
+старого автозапуска, загрузку через прокси, резервную копию профиля и отказы записи.
 
 <details>
 <summary><strong>Дополнительные проверки</strong></summary>

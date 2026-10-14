@@ -13,6 +13,17 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 COMMON = ROOT / "sysinfo.sh"
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
+# Actual single-line startup hook from the release before managed blocks.
+LEGACY_BASH_HOOK = (
+    'case $- in   *i*) if [ -t 0 ] && [ -t 1 ]; then (     sysinfo_url=https://raw.githubuserco'
+    'ntent.com/nordz0r/sysinfo/master/sysinfo.sh;     if command -v curl >/dev/null 2>&1; then '
+    '      sysinfo_code=$(curl -fsSL --connect-timeout 2 --max-time 5 "$sysinfo_url") || exit; '
+    '    elif command -v wget >/dev/null 2>&1; then       sysinfo_args=(-qO- -T5);       if wge'
+    't --help 2>&1 | grep -q -- --tries; then sysinfo_args+=(-t1); fi;       sysinfo_code=$(wge'
+    't "${sysinfo_args[@]}" "$sysinfo_url") || exit;     else       printf \'%s\\n\' \'sysinfo: ins'
+    'tall curl or wget for GitHub startup.\' >&2; exit 1;     fi;     [ -n "$sysinfo_code" ] && '
+    '"$BASH" -c "$sysinfo_code" sysinfo.sh --interactive-only;   ) || :; fi ;; esac'
+)
 
 DISKS = """Filesystem 1024-blocks Used Available Capacity Mounted on
 /dev/root 104857600 52428800 30000000 70% /
@@ -79,7 +90,8 @@ class Fixture:
         self.env = {**{k: v for k, v in os.environ.items() if k != "LANG" and not k.startswith("LC_")}, "PATH": str(self.bin), "TERM": "xterm", "LANG": "C",
                     "SYSINFO_COMMAND_LOG": str(self.log)}
         self.shell = os.environ.get("SYSINFO_TEST_SH", "/bin/sh")
-        for tool in ("sh", "awk", "cat", "tr", "mkdir", "mktemp", "chmod", "mv", "rm", "grep"):
+        (self.bin / "bash").symlink_to("/bin/bash")
+        for tool in ("sh", "awk", "cat", "tr", "mkdir", "mktemp", "chmod", "mv", "rm", "grep", "cp", "cmp"):
             (self.bin / tool).symlink_to(os.environ.get(f"SYSINFO_TEST_{tool.upper()}", shutil.which(tool)))
         self.command("uname", f"{system} server 24.0.0 {'arm64' if system == 'Darwin' else 'x86_64'}\n")
         self.command("df", DISKS)
@@ -104,11 +116,13 @@ Pages speculative: 1.
             self.command("route", "    interface: en0\n")
             self.command("ifconfig", IFCONFIG)
 
-    def command(self, name, output="", status=0, help_output=None):
+    def command(self, name, output="", status=0, help_output=None, log_proxy=False):
         executable = self.bin / name
         if executable.is_symlink():
             executable.unlink()
         script = "#!/bin/sh\n" + f'printf "%s\\n" "{name}:$*" >> "$SYSINFO_COMMAND_LOG"\n'
+        if log_proxy:
+            script += 'printf "proxy:%s|%s\\n" "${https_proxy-}" "${http_proxy-}" >> "$SYSINFO_COMMAND_LOG"\n'
         if help_output is not None:
             script += f'if [ "$1" = --help ]; then printf "%s\\n" {shlex.quote(help_output)}; exit 0; fi\n'
         executable.write_text(script + f"printf '%s' {shlex.quote(output)}\nexit {status}\n")
@@ -154,12 +168,10 @@ class SysinfoTests(unittest.TestCase):
         block = COMMON.read_text().split("# BEGIN BASH STARTUP\n", 1)[1].split("# END BASH STARTUP", 1)[0]
         return "\n".join(line[2:] for line in block.splitlines())
 
-    def startup_profile(self, fixture):
+    def startup_profile(self, fixture, *args):
         fixture.home.mkdir(exist_ok=True)
         profile = fixture.home / ".bashrc"
-        integration = self.startup_instructions().replace("$HOME/.bashrc", str(profile))
-        result = subprocess.run(["/bin/bash", "-c", integration], env=fixture.env,
-                                capture_output=True, text=True, timeout=10)
+        result = fixture.run("--setup-bash", *args, piped=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         return profile
 
@@ -522,8 +534,14 @@ class SysinfoTests(unittest.TestCase):
         integration = self.startup_instructions()
         for name in ("README.md", "README.en.md"):
             blocks = re.findall(r"\x60{3}bash\n(.*?)\n\x60{3}", (ROOT / name).read_text(), re.S)
-            documented = next(block for block in blocks if "sysinfo_hook=" in block)
+            documented = next(block for block in blocks if "--setup-bash" in block)
             self.assertEqual(documented, integration, name)
+        # Execute the documented pipeline too, with a fixture download payload.
+        configured = subprocess.run(["/bin/bash", "-c", integration], env=f.env,
+                                    capture_output=True, text=True, timeout=10)
+        self.assertEqual(configured.returncode, 0, configured.stderr)
+        self.assertIn("curl:-fsSL https://", f.log.read_text())
+        f.log.unlink()
         for _ in range(2):
             self.startup_profile(f)
         self.assertEqual(profile.read_text().count("https://raw.githubusercontent.com/nordz0r/sysinfo/master/sysinfo.sh"), 1)
@@ -603,18 +621,167 @@ class SysinfoTests(unittest.TestCase):
             f = self.fixture()
             self.assertEqual(f.run("--install").returncode, 0)
             blocks = re.findall(r"\x60{3}bash\n(.*?)\n\x60{3}", (ROOT / name).read_text(), re.S)
-            integration = next(block for block in blocks if "sysinfo_local_hook=" in block)
+            integration = next(block for block in blocks if "--setup-bash --local" in block)
             integration = integration.replace("$HOME/.local/bin/sysinfo.sh", str(f.target))
-            integration = integration.replace("$HOME/.bashrc", str(f.home / ".bashrc"))
             for _ in range(2):
                 result = subprocess.run(["/bin/bash", "-c", integration], env=f.env,
                                         capture_output=True, text=True, timeout=10)
                 self.assertEqual(result.returncode, 0, result.stderr)
             profile = f.home / ".bashrc"
-            self.assertEqual(profile.read_text().count(str(f.target)), 2)
+            self.assertEqual(profile.read_text().count("# >>> sysinfo >>>"), 1)
+            profile.write_text(profile.read_text().replace("$HOME/.local/bin/sysinfo.sh", str(f.target)))
             self.table(f.terminal(["/bin/bash", "--noprofile", "--norc", "-i", "-c",
                                    'source "$1"', "sysinfo-startup", str(profile)]))
             self.assertNotIn("curl:", f.log.read_text())
+
+    def test_bash_setup_migrates_legacy_entries_and_preserves_first_backup(self):
+        f = self.fixture()
+        f.home.mkdir()
+        profile = f.home / ".bashrc"
+        remote = "https://raw.githubusercontent.com/nordz0r/sysinfo/master/sysinfo.sh"
+        original = (
+            'export EDITOR=vi\n# documentation: sysinfo and other tools\n'
+            '# by NorD\n'
+            f'curl -Lso- -m 3 --proxy http://deb-proxy.lan:3128 {remote} | bash\n'
+            f'wget -qO- {remote.replace("sysinfo.sh", "sysinfo_v2.sh")} | sh\n'
+            '[ ! -x "$HOME/.local/bin/sysinfo.sh" ] || "$HOME/.local/bin/sysinfo.sh"\n'
+            'case $- in *i*) [ ! -x "$HOME/.local/bin/sysinfo.sh" ] || "$HOME/.local/bin/sysinfo.sh" --interactive-only ;; esac\n'
+            f"{LEGACY_BASH_HOOK}\n"
+            "alias sysinfo_notes='printf notes'"  # no final newline
+        )
+        profile.write_text(original)
+        profile.chmod(0o640)
+        self.startup_profile(f, "--proxy", "http://deb-proxy.lan:3128")
+        updated = profile.read_text()
+        self.assertTrue(updated.startswith('export EDITOR=vi\n# documentation: sysinfo and other tools\nalias sysinfo_notes='))
+        self.assertNotIn("# by NorD", updated)
+        self.assertNotIn("sysinfo_v2", updated)
+        self.assertNotIn(".local/bin", updated)
+        self.assertEqual(updated.count(remote), 1)
+        self.assertIn("# Sysinfo: lightweight system summary", updated)
+        self.assertIn("# https://github.com/nordz0r/sysinfo", updated)
+        self.assertEqual(profile.stat().st_mode & 0o777, 0o640)
+        backup = f.home / ".bashrc.sysinfo.bak"
+        self.assertEqual(backup.read_text(), original)
+        inode = profile.stat().st_ino
+        self.startup_profile(f, "--proxy", "http://deb-proxy.lan:3128")
+        self.assertEqual(profile.read_text(), updated)
+        self.assertEqual(profile.stat().st_ino, inode)
+        self.startup_profile(f, "--proxy", "http://new-proxy.lan:3128")
+        self.assertNotIn("deb-proxy", profile.read_text())
+        self.assertEqual(backup.read_text(), original)
+
+    def test_bash_setup_preserves_unrelated_urls_comments_and_commands(self):
+        f = self.fixture()
+        f.home.mkdir()
+        original = (
+            '# by NorD\nexport LANG=C\n'
+            '# curl https://raw.githubusercontent.com/nordz0r/sysinfo/master/sysinfo.sh | bash\n'
+            'curl https://example.com/sysinfo.sh | bash\n'
+            'alias sysinfo="sh /opt/other/sysinfo.sh"\n'
+        )
+        (f.home / ".bashrc").write_text(original)
+        profile = self.startup_profile(f)
+        self.assertTrue(profile.read_text().startswith(original))
+        self.assertFalse(f.log.exists())
+
+    def test_bash_setup_refuses_ambiguous_migration_and_broken_blocks(self):
+        remote = "https://raw.githubusercontent.com/nordz0r/sysinfo/master/sysinfo.sh"
+        for original in (
+                f'curl -fsSL {remote} | bash; echo preserve\n',
+                '[ ! -x "$HOME/.local/bin/sysinfo.sh" ] || echo preserve\n',
+                LEGACY_BASH_HOOK.replace('sysinfo_url=', 'printf preserve; sysinfo_url=', 1) + '\n',
+                '# >>> sysinfo >>>\necho preserve\n',
+                '# <<< sysinfo <<<\n',
+                f'if true; then\n  curl -fsSL {remote} | bash\nfi\n'):
+            with self.subTest(original=original):
+                f = self.fixture()
+                f.home.mkdir()
+                profile = f.home / ".bashrc"
+                profile.write_text(original)
+                self.assertEqual(f.run("--setup-bash").returncode, 1)
+                self.assertEqual(profile.read_text(), original)
+                self.assertFalse((f.home / ".bashrc.sysinfo.bak").exists())
+                self.assertFalse(list(f.home.glob(".sysinfo-bashrc.*")))
+
+    def test_bash_setup_refuses_nonregular_profile_and_failed_write(self):
+        for kind in ("symlink", "directory", "failed-move"):
+            f = self.fixture()
+            f.home.mkdir()
+            profile = f.home / ".bashrc"
+            unrelated = f.home / "other"
+            unrelated.write_text("# keep\n")
+            if kind == "symlink":
+                profile.symlink_to(unrelated)
+            elif kind == "directory":
+                profile.mkdir()
+            else:
+                profile.write_text("# keep\n")
+                f.command("mv", status=1)
+            self.assertEqual(f.run("--setup-bash").returncode, 1)
+            self.assertEqual(unrelated.read_text(), "# keep\n")
+            if kind == "failed-move":
+                self.assertEqual(profile.read_text(), "# keep\n")
+            self.assertFalse(list(f.home.glob(".sysinfo-bashrc.*")))
+
+    def test_github_startup_uses_configured_proxy_without_executing_its_contents(self):
+        for downloader in ("curl", "wget"):
+            with self.subTest(downloader=downloader):
+                f = self.fixture()
+                # Quotes and substitutions must remain literal configuration data.
+                proxy = "http://proxy.lan:3128/'$(printf INJECTED >&2)"
+                if downloader == "wget":
+                    (f.bin / "curl").unlink()
+                f.command(downloader, f.common.read_text(), help_output="-T SEC", log_proxy=downloader == "wget")
+                profile = self.startup_profile(f, "--proxy", proxy)
+                self.assertFalse(f.log.exists())
+                result = f.terminal(["/bin/bash", "--noprofile", "--norc", "-i", "-c",
+                                     'source "$1"', "sysinfo-startup", str(profile)])
+                self.table(result)
+                self.assertNotIn("INJECTED", result.stderr)
+                commands = f.log.read_text()
+                self.assertIn(f"--proxy {proxy}" if downloader == "curl" else f"proxy:{proxy}|{proxy}", commands)
+                # Proxy configuration is scoped to the download subshell.
+                self.assertNotIn(f"{proxy}\n", result.stdout)
+
+    def test_documented_proxy_setup_commands(self):
+        for name in ("README.md", "README.en.md"):
+            blocks = re.findall(r"\x60{3}bash\n(.*?)\n\x60{3}", (ROOT / name).read_text(), re.S)
+            for command in (block for block in blocks if "sysinfo_proxy=" in block):
+                with self.subTest(document=name, command=command.splitlines()[1].split()[0]):
+                    f = self.fixture()
+                    f.home.mkdir()
+                    for downloader in ("curl", "wget"):
+                        f.command(downloader, f.common.read_text(), log_proxy=downloader == "wget")
+                    result = subprocess.run(["/bin/bash", "-c", command], env=f.env,
+                                            capture_output=True, text=True, timeout=10)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    profile = f.home / ".bashrc"
+                    self.assertIn("sysinfo_proxy=http://deb-proxy.lan:3128", profile.read_text())
+                    commands = f.log.read_text()
+                    self.assertTrue("--proxy http://deb-proxy.lan:3128" in commands
+                                    or "proxy:http://deb-proxy.lan:3128|http://deb-proxy.lan:3128" in commands)
+                    self.assertFalse(f.target.exists())
+
+    def test_bash_setup_switches_between_remote_and_local_without_duplicates(self):
+        f = self.fixture()
+        profile = self.startup_profile(f)
+        self.startup_profile(f, "--local")
+        self.assertNotIn("raw.githubusercontent.com", profile.read_text())
+        self.assertIn(".local/bin/sysinfo.sh", profile.read_text())
+        self.startup_profile(f)
+        self.assertNotIn(".local/bin/sysinfo.sh", profile.read_text())
+        self.assertEqual(profile.read_text().count("# >>> sysinfo >>>"), 1)
+
+    def test_bash_setup_rejects_conflicting_or_incomplete_proxy_options(self):
+        f = self.fixture()
+        for args in (("--proxy",), ("--proxy", "http://proxy"),
+                     ("--setup-bash", "--proxy"),
+                     ("--setup-bash", "--proxy", "socks5://proxy"),
+                     ("--setup-bash", "--local", "--proxy", "http://proxy"),
+                     ("--setup-bash", "--install")):
+            self.assertEqual(f.run(*args).returncode, 2, args)
+            self.assertFalse(f.home.exists())
 
     def test_interactive_only_skips_nonterminal_and_pipe_runs(self):
         f = self.fixture()

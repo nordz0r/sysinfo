@@ -7,28 +7,14 @@ sysinfo_payload=$(cat <<'SYSINFO_PAYLOAD'
 # Copyright (C) 2019 NorD. MIT license.
 
 # Default: load the current GitHub script at each interactive Bash startup.
-# Run the following commented block once in Bash; it adds one guarded line.
+# Run once to configure ~/.bashrc (backs up and replaces legacy sysinfo entries).
 # BEGIN BASH STARTUP
-# sysinfo_hook=$(cat <<'SYSINFO_BASHRC' | tr '\n' ' '
-# case $- in
-#   *i*) if [ -t 0 ] && [ -t 1 ]; then (
-#     sysinfo_url=https://raw.githubusercontent.com/nordz0r/sysinfo/master/sysinfo.sh;
-#     if command -v curl >/dev/null 2>&1; then
-#       sysinfo_code=$(curl -fsSL --connect-timeout 2 --max-time 5 "$sysinfo_url") || exit;
-#     elif command -v wget >/dev/null 2>&1; then
-#       sysinfo_args=(-qO- -T5);
-#       if wget --help 2>&1 | grep -q -- --tries; then sysinfo_args+=(-t1); fi;
-#       sysinfo_code=$(wget "${sysinfo_args[@]}" "$sysinfo_url") || exit;
-#     else
-#       printf '%s\n' 'sysinfo: install curl or wget for GitHub startup.' >&2; exit 1;
-#     fi;
-#     [ -n "$sysinfo_code" ] && "$BASH" -c "$sysinfo_code" sysinfo.sh --interactive-only;
-#   ) || :; fi ;;
-# esac
-# SYSINFO_BASHRC
-# )
-# grep -qxF "$sysinfo_hook" "$HOME/.bashrc" 2>/dev/null || printf '\n%s\n' "$sysinfo_hook" >> "$HOME/.bashrc"
+# curl -fsSL https://raw.githubusercontent.com/nordz0r/sysinfo/master/sysinfo.sh | bash -s -- --setup-bash
 # END BASH STARTUP
+# With a proxy (used now and saved for subsequent startup downloads):
+# sysinfo_proxy='http://deb-proxy.lan:3128'
+# curl -fsSL --proxy "$sysinfo_proxy" https://raw.githubusercontent.com/nordz0r/sysinfo/master/sysinfo.sh | bash -s -- --setup-bash --proxy "$sysinfo_proxy"
+# Without curl: wget -qO- <same URL> | bash -s -- --setup-bash
 # Offline option B: --install saves a local executable; see README for its hook.
 # --install/--uninstall never edit .bashrc; all collection/rendering stays here.
 
@@ -50,31 +36,223 @@ all_interfaces=0
 color=auto
 action=report
 interactive_only=0
-for arg do
+setup_proxy=
+setup_proxy_set=0
+setup_local=0
+while [ "$#" -gt 0 ]; do
+    arg=$1
+    shift
     case "$arg" in
-        --install|--uninstall)
+        --install|--uninstall|--setup-bash)
             if [ "$action" != report ] && [ "$action" != "$arg" ]; then
-                printf '%s\n' 'Use either --install or --uninstall, not both.' >&2
+                printf '%s\n' 'Use only one of --install, --uninstall or --setup-bash.' >&2
                 exit 2
             fi
             action=$arg ;;
         --details) details=1; all_interfaces=1 ;;
         --all-interfaces) all_interfaces=1 ;;
         --interactive-only) interactive_only=1 ;;
+        --local) setup_local=1 ;;
+        --proxy)
+            if [ "$#" -eq 0 ]; then
+                printf '%s\n' '--proxy requires a URL (or an empty string to use environment settings).' >&2
+                exit 2
+            fi
+            setup_proxy=$1; setup_proxy_set=1; shift ;;
         --no-color) color=never ;;
         --color) color=always ;;
         -h|--help)
             printf '%s\n' 'Usage: sysinfo.sh [--install|--uninstall] [--details] [--all-interfaces]' \
                 '                  [--interactive-only] [--color|--no-color]' \
+                '       sysinfo.sh --setup-bash [--proxy URL | --local]' \
                 'Default: four local filesystems, three interfaces (all on OpenWrt).' \
                 '--details: show all local filesystems and interfaces.' \
                 '--interactive-only: print only when stdin and stdout are terminals.' \
                 '--install: save an executable copy to ~/.local/bin/sysinfo.sh.' \
-                '--uninstall: remove that copy; leave the directories in place.'
+                '--uninstall: remove that copy; leave the directories in place.' \
+                '--setup-bash: migrate sysinfo startup entries in ~/.bashrc (with backup).' \
+                '--proxy URL: save an HTTP(S) proxy for GitHub startup; HTTPS needs curl.' \
+                '--local: configure Bash startup using the installed copy instead.'
             exit 0 ;;
         *) printf 'Unknown option: %s\n' "$arg" >&2; exit 2 ;;
     esac
 done
+if { [ "$setup_proxy_set" -eq 1 ] || [ "$setup_local" -eq 1 ]; } && [ "$action" != --setup-bash ]; then
+    printf '%s\n' '--proxy and --local require --setup-bash.' >&2
+    exit 2
+fi
+
+# Profile changes are a separate, explicit action. Reporting stays read-only.
+if [ "$action" = --setup-bash ]; then
+    install_home=${HOME:-}
+    case "$install_home" in
+        /*) ;;
+        *) printf '%s\n' 'HOME must be set to an absolute directory for Bash setup.' >&2; exit 1 ;;
+    esac
+    if [ "$setup_local" -eq 1 ] && [ "$setup_proxy_set" -eq 1 ]; then
+        printf '%s\n' '--proxy cannot be combined with --local.' >&2
+        exit 2
+    fi
+    case "$setup_proxy" in
+        ''|http://?*|https://?*) ;;
+        *) printf '%s\n' 'Use an http:// or https:// proxy URL for curl/wget.' >&2; exit 2 ;;
+    esac
+    for tool in bash awk cat mktemp cp cmp mv rm; do
+        if ! command -v "$tool" >/dev/null 2>&1; then
+            printf 'Required Bash setup command missing: %s\n' "$tool" >&2
+            exit 1
+        fi
+    done
+    setup_profile=$install_home/.bashrc
+    setup_backup=$setup_profile.sysinfo.bak
+    if [ -L "$setup_profile" ] || { [ -e "$setup_profile" ] && [ ! -f "$setup_profile" ]; }; then
+        printf 'Refusing to modify a symlink or non-regular file: %s\n' "$setup_profile" >&2
+        exit 1
+    fi
+    setup_tmp=$(mktemp "$install_home/.sysinfo-bashrc.XXXXXX") || exit 1
+    trap 'if [ -n "$setup_tmp" ]; then rm -f "$setup_tmp"; fi' 0
+    trap 'exit 1' HUP INT TERM
+    setup_input=/dev/null
+    if [ -f "$setup_profile" ]; then
+        setup_input=$setup_profile
+        # Preserve the original permissions when replacing the profile.
+        cp -p "$setup_profile" "$setup_tmp" || exit 1
+    fi
+    # Exact pre-marker hook emitted by older releases. Match it as a whole so
+    # a user's larger case statement cannot lose unrelated commands.
+    setup_legacy_hook=$(cat <<'SYSINFO_LEGACY_BASHRC'
+case $- in
+  *i*) if [ -t 0 ] && [ -t 1 ]; then (
+    sysinfo_url=https://raw.githubusercontent.com/nordz0r/sysinfo/master/sysinfo.sh;
+    if command -v curl >/dev/null 2>&1; then
+      sysinfo_code=$(curl -fsSL --connect-timeout 2 --max-time 5 "$sysinfo_url") || exit;
+    elif command -v wget >/dev/null 2>&1; then
+      sysinfo_args=(-qO- -T5);
+      if wget --help 2>&1 | grep -q -- --tries; then sysinfo_args+=(-t1); fi;
+      sysinfo_code=$(wget "${sysinfo_args[@]}" "$sysinfo_url") || exit;
+    else
+      printf '%s\n' 'sysinfo: install curl or wget for GitHub startup.' >&2; exit 1;
+    fi;
+    [ -n "$sysinfo_code" ] && "$BASH" -c "$sysinfo_code" sysinfo.sh --interactive-only;
+  ) || :; fi ;;
+esac
+SYSINFO_LEGACY_BASHRC
+    ) || exit 1
+    # Match this repository and the documented local hooks, never just "sysinfo".
+    # Unrecognised compound commands abort the update rather than losing content.
+    if ! SYSINFO_LEGACY_HOOK="$setup_legacy_hook" awk '
+        function flush() { if (pending != "") print pending; pending = "" }
+        function normal(s) {
+            gsub(/[[:space:]]+/, " ", s)
+            sub(/^ /, "", s); sub(/ $/, "", s)
+            return s
+        }
+        BEGIN {
+            oldhook = normal(ENVIRON["SYSINFO_LEGACY_HOOK"])
+            remote = "https://raw[.]githubusercontent[.]com/nordz0r/sysinfo/(master|main)/sysinfo(_v2)?[.]sh([[:space:]\047\042;]|$)"
+            localpath = "(\\$HOME|\\$[{]HOME[}]|~)/[.]local/bin/sysinfo[.]sh"
+            localfile = "[\042\047]?" localpath "[\042\047]?"
+            localcall = localfile "([[:space:]]+--interactive-only)?"
+            localguard = "\\[ ! -x " localfile " \\] [|][|] " localcall
+        }
+        {
+            line = $0
+            sub(/^[[:space:]]*/, "", line); sub(/[[:space:]]*$/, "", line)
+            if (line == "# >>> sysinfo >>>") {
+                if (managed) exit 2
+                flush(); managed = 1; next
+            }
+            if (line == "# <<< sysinfo <<<") {
+                if (!managed) exit 2
+                managed = 0; next
+            }
+            if (managed) next
+            if (line == "# by NorD") { flush(); pending = $0; next }
+            if (line ~ /^#/ || line == "") { flush(); print; next }
+            owned = line ~ remote || line ~ localpath
+            legacy = 0
+            if (line ~ remote) {
+                if (line ~ /^(curl|wget)[[:space:]]/ && line ~ /[|][[:space:]]*(bash|sh)([[:space:]]+-s[[:space:]]+--)?([[:space:]]+#.*)?$/) {
+                    download = line; sub(/[|].*$/, "", download)
+                    legacy = download !~ /[;&`<>|]/ && download !~ /\$\(/
+                }
+                # Previous releases generated this complete, single-line hook.
+                if (normal(line) == oldhook) legacy = 1
+            } else if (line ~ localpath) {
+                if (line ~ "^(sh[[:space:]]+|bash[[:space:]]+)?" localcall "$") legacy = 1
+                if (line ~ "^case \\$- in [*]i[*][)] " localguard " ;; esac$") legacy = 1
+                if (line ~ "^" localguard "$") legacy = 1
+            }
+            if (legacy) { pending = ""; next }
+            if (owned) { bad = NR; exit 2 }
+            flush(); print
+        }
+        END {
+            flush()
+            if (managed || bad) exit 2
+        }
+    ' "$setup_input" > "$setup_tmp"; then
+        printf '%s\n' 'Could not safely migrate existing sysinfo entries; .bashrc was left unchanged.' >&2
+        exit 1
+    fi
+    # Quote as Bash data, including spaces, quotes and shell metacharacters.
+    setup_quoted_proxy=$(bash -c 'printf "%q" "$1"' sysinfo "$setup_proxy") || exit 1
+    if ! {
+        printf '%s\n' '# >>> sysinfo >>>' \
+            '# Sysinfo: lightweight system summary at interactive Bash startup.' \
+            '# https://github.com/nordz0r/sysinfo'
+        if [ "$setup_local" -eq 1 ]; then
+            cat <<'SYSINFO_LOCAL_BASHRC'
+case $- in
+  *i*) [ ! -x "$HOME/.local/bin/sysinfo.sh" ] || "$HOME/.local/bin/sysinfo.sh" --interactive-only ;;
+esac
+SYSINFO_LOCAL_BASHRC
+        else
+            printf 'case $- in\n  *i*) if [ -t 0 ] && [ -t 1 ]; then (\n    sysinfo_proxy=%s\n' "$setup_quoted_proxy"
+            cat <<'SYSINFO_REMOTE_BASHRC'
+    sysinfo_url=https://raw.githubusercontent.com/nordz0r/sysinfo/master/sysinfo.sh
+    if command -v curl >/dev/null 2>&1; then
+      set -- -fsSL --connect-timeout 2 --max-time 5
+      if [ -n "$sysinfo_proxy" ]; then set -- "$@" --proxy "$sysinfo_proxy"; fi
+      sysinfo_code=$(curl "$@" "$sysinfo_url") || exit
+    elif command -v wget >/dev/null 2>&1; then
+      set -- -qO- -T5
+      if wget --help 2>&1 | grep -q -- --tries; then set -- "$@" -t1; fi
+      if [ -n "$sysinfo_proxy" ]; then
+        sysinfo_code=$(https_proxy="$sysinfo_proxy" http_proxy="$sysinfo_proxy" wget "$@" "$sysinfo_url") || exit
+      else
+        sysinfo_code=$(wget "$@" "$sysinfo_url") || exit
+      fi
+    else
+      printf '%s\n' 'sysinfo: install curl or wget for GitHub startup.' >&2; exit 1
+    fi
+    [ -n "$sysinfo_code" ] && "$BASH" -c "$sysinfo_code" sysinfo.sh --interactive-only
+  ) || :; fi ;;
+esac
+SYSINFO_REMOTE_BASHRC
+        fi
+        printf '%s\n' '# <<< sysinfo <<<'
+    } >> "$setup_tmp"; then
+        printf '%s\n' 'Could not write the Bash startup block.' >&2
+        exit 1
+    fi
+    if ! bash -n "$setup_tmp"; then
+        printf '%s\n' 'Bash syntax validation failed; .bashrc was left unchanged.' >&2
+        exit 1
+    fi
+    if [ -f "$setup_profile" ] && cmp -s "$setup_tmp" "$setup_profile"; then
+        printf 'Bash startup already configured: %s\n' "$setup_profile"
+        exit 0
+    fi
+    if [ -f "$setup_profile" ] && [ ! -e "$setup_backup" ] && [ ! -L "$setup_backup" ]; then
+        cp -p "$setup_profile" "$setup_backup" || exit 1
+        printf 'Backup: %s\n' "$setup_backup"
+    fi
+    mv -f "$setup_tmp" "$setup_profile" || exit 1
+    setup_tmp=
+    printf 'Configured Bash startup: %s\n' "$setup_profile"
+    exit 0
+fi
 
 # Installation is explicit. Neither reporting nor uninstall creates directories.
 if [ "$action" != report ]; then
