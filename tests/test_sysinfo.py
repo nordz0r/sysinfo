@@ -79,7 +79,7 @@ class Fixture:
         self.env = {**{k: v for k, v in os.environ.items() if k != "LANG" and not k.startswith("LC_")}, "PATH": str(self.bin), "TERM": "xterm", "LANG": "C",
                     "SYSINFO_COMMAND_LOG": str(self.log)}
         self.shell = os.environ.get("SYSINFO_TEST_SH", "/bin/sh")
-        for tool in ("sh", "awk", "cat", "mkdir", "mktemp", "chmod", "mv", "rm", "grep"):
+        for tool in ("sh", "awk", "cat", "tr", "mkdir", "mktemp", "chmod", "mv", "rm", "grep"):
             (self.bin / tool).symlink_to(os.environ.get(f"SYSINFO_TEST_{tool.upper()}", shutil.which(tool)))
         self.command("uname", f"{system} server 24.0.0 {'arm64' if system == 'Darwin' else 'x86_64'}\n")
         self.command("df", DISKS)
@@ -104,13 +104,14 @@ Pages speculative: 1.
             self.command("route", "    interface: en0\n")
             self.command("ifconfig", IFCONFIG)
 
-    def command(self, name, output="", status=0):
+    def command(self, name, output="", status=0, help_output=None):
         executable = self.bin / name
         if executable.is_symlink():
             executable.unlink()
-        executable.write_text("#!/bin/sh\n"
-                              f'printf "%s\\n" "{name}:$*" >> "$SYSINFO_COMMAND_LOG"\n'
-                              f"printf '%s' {shlex.quote(output)}\nexit {status}\n")
+        script = "#!/bin/sh\n" + f'printf "%s\\n" "{name}:$*" >> "$SYSINFO_COMMAND_LOG"\n'
+        if help_output is not None:
+            script += f'if [ "$1" = --help ]; then printf "%s\\n" {shlex.quote(help_output)}; exit 0; fi\n'
+        executable.write_text(script + f"printf '%s' {shlex.quote(output)}\nexit {status}\n")
         executable.chmod(0o755)
 
     def run(self, *args, piped=False):
@@ -149,6 +150,19 @@ Pages speculative: 1.
 
 
 class SysinfoTests(unittest.TestCase):
+    def startup_instructions(self):
+        block = COMMON.read_text().split("# BEGIN BASH STARTUP\n", 1)[1].split("# END BASH STARTUP", 1)[0]
+        return "\n".join(line[2:] for line in block.splitlines())
+
+    def startup_profile(self, fixture):
+        fixture.home.mkdir(exist_ok=True)
+        profile = fixture.home / ".bashrc"
+        integration = self.startup_instructions().replace("$HOME/.bashrc", str(profile))
+        result = subprocess.run(["/bin/bash", "-c", integration], env=fixture.env,
+                                capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return profile
+
     def fixture(self, system="Linux"):
         fixture = Fixture(system)
         self.addCleanup(fixture.close)
@@ -501,23 +515,20 @@ class SysinfoTests(unittest.TestCase):
 
     def test_header_startup_command_is_manual_and_idempotent(self):
         f = self.fixture()
-        self.assertEqual(f.run("--install").returncode, 0)
+        f.command("curl", f.common.read_text())
+        f.home.mkdir()
         profile = f.home / ".bashrc"
         profile.write_text("# existing user configuration")
-        integration = "\n".join(line[2:] for line in COMMON.read_text().splitlines()
-                                if line.startswith(("# sysinfo_hook=", "# grep -qxF")))
+        integration = self.startup_instructions()
         for name in ("README.md", "README.en.md"):
             blocks = re.findall(r"\x60{3}bash\n(.*?)\n\x60{3}", (ROOT / name).read_text(), re.S)
             documented = next(block for block in blocks if "sysinfo_hook=" in block)
             self.assertEqual(documented, integration, name)
-        integration = integration.replace("$HOME/.local/bin/sysinfo.sh", str(f.target))
-        integration = integration.replace("$HOME/.bashrc", str(profile))
         for _ in range(2):
-            p = subprocess.run(["/bin/bash", "-c", integration], env=f.env,
-                               capture_output=True, text=True, timeout=10)
-            self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertEqual(profile.read_text().count(str(f.target)), 2)
+            self.startup_profile(f)
+        self.assertEqual(profile.read_text().count("https://raw.githubusercontent.com/nordz0r/sysinfo/master/sysinfo.sh"), 1)
         self.assertTrue(profile.read_text().startswith("# existing user configuration\n"))
+        self.assertFalse(f.log.exists())
         p = subprocess.run(["/bin/bash", str(profile)], env=f.env,
                            capture_output=True, text=True, timeout=10)
         self.assertEqual(p.returncode, 0, p.stderr)
@@ -525,6 +536,85 @@ class SysinfoTests(unittest.TestCase):
         result = f.terminal(["/bin/bash", "--noprofile", "--norc", "-i", "-c",
                              'source "$1"', "sysinfo-startup", str(profile)])
         self.table(result)
+        commands = f.log.read_text()
+        self.assertIn("curl:-fsSL --connect-timeout 2 --max-time 5 https://", commands)
+        self.assertNotIn("wget:", commands)
+        self.assertFalse(f.target.exists())
+        self.assertFalse((f.home / ".local").exists())
+
+    def test_github_startup_fetches_again_for_each_shell(self):
+        f = self.fixture()
+        f.command("curl", f.common.read_text())
+        profile = self.startup_profile(f)
+        for _ in range(2):
+            self.table(f.terminal(["/bin/bash", "--noprofile", "--norc", "-i", "-c",
+                                   'source "$1"', "sysinfo-startup", str(profile)]))
+        self.assertEqual(f.log.read_text().count("curl:"), 2)
+        self.assertFalse(f.target.exists())
+
+    def test_github_startup_supports_gnu_and_busybox_wget(self):
+        for help_text, tries in (("--tries=NUMBER", True), ("-T SEC", False)):
+            f = self.fixture()
+            (f.bin / "curl").unlink()
+            f.command("wget", f.common.read_text(), help_output=help_text)
+            profile = self.startup_profile(f)
+            self.table(f.terminal(["/bin/bash", "--noprofile", "--norc", "-i", "-c",
+                                   'source "$1"', "sysinfo-startup", str(profile)]))
+            fetch = next(line for line in f.log.read_text().splitlines() if line.startswith("wget:-qO-"))
+            self.assertIn("-T5", fetch)
+            self.assertEqual("-t1" in fetch, tries)
+            self.assertFalse(f.target.exists())
+
+    def test_github_startup_skips_failed_partial_and_empty_downloads(self):
+        for content, status in (("", 0), ("printf SHOULD_NOT_RUN", 22), ("", 28)):
+            f = self.fixture()
+            f.command("curl", content, status)
+            profile = self.startup_profile(f)
+            result = f.terminal(["/bin/bash", "--noprofile", "--norc", "-i", "-c",
+                                 'source "$1"', "sysinfo-startup", str(profile)])
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout, "")
+            self.assertEqual(len(f.log.read_text().splitlines()), 1)
+            self.assertFalse(f.target.exists())
+
+    def test_github_startup_suggests_a_missing_downloader(self):
+        f = self.fixture()
+        (f.bin / "curl").unlink()
+        profile = self.startup_profile(f)
+        result = f.terminal(["/bin/bash", "--noprofile", "--norc", "-i", "-c",
+                             'source "$1"', "sysinfo-startup", str(profile)])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "")
+        self.assertIn("install curl or wget", result.stderr)
+        self.assertFalse(f.log.exists())
+
+    def test_github_startup_skips_fetch_when_terminal_is_missing(self):
+        f = self.fixture()
+        f.command("curl", f.common.read_text())
+        profile = self.startup_profile(f)
+        result = f.terminal(["/bin/bash", "--noprofile", "--norc", "-i", "-c",
+                             'source "$1"', "sysinfo-startup", str(profile)], tty_input=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "")
+        self.assertFalse(f.log.exists())
+
+    def test_local_startup_is_documented_as_an_offline_alternative(self):
+        for name in ("README.md", "README.en.md"):
+            f = self.fixture()
+            self.assertEqual(f.run("--install").returncode, 0)
+            blocks = re.findall(r"\x60{3}bash\n(.*?)\n\x60{3}", (ROOT / name).read_text(), re.S)
+            integration = next(block for block in blocks if "sysinfo_local_hook=" in block)
+            integration = integration.replace("$HOME/.local/bin/sysinfo.sh", str(f.target))
+            integration = integration.replace("$HOME/.bashrc", str(f.home / ".bashrc"))
+            for _ in range(2):
+                result = subprocess.run(["/bin/bash", "-c", integration], env=f.env,
+                                        capture_output=True, text=True, timeout=10)
+                self.assertEqual(result.returncode, 0, result.stderr)
+            profile = f.home / ".bashrc"
+            self.assertEqual(profile.read_text().count(str(f.target)), 2)
+            self.table(f.terminal(["/bin/bash", "--noprofile", "--norc", "-i", "-c",
+                                   'source "$1"', "sysinfo-startup", str(profile)]))
+            self.assertNotIn("curl:", f.log.read_text())
 
     def test_interactive_only_skips_nonterminal_and_pipe_runs(self):
         f = self.fixture()
@@ -558,12 +648,10 @@ class SysinfoTests(unittest.TestCase):
 
     def test_noninteractive_bash_hook_stays_silent_even_with_terminals(self):
         f = self.fixture()
-        self.assertEqual(f.run("--install").returncode, 0)
-        integration = next(line[2:] for line in COMMON.read_text().splitlines()
-                           if line.startswith("# sysinfo_hook="))
-        integration = integration.replace("$HOME/.local/bin/sysinfo.sh", str(f.target))
+        f.command("curl", f.common.read_text())
+        profile = self.startup_profile(f)
         result = f.terminal(["/bin/bash", "--noprofile", "--norc", "-c",
-                             integration + '\neval "$sysinfo_hook"'])
+                             'source "$1"', "sysinfo-startup", str(profile)])
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, "")
         self.assertFalse(f.log.exists())

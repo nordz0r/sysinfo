@@ -6,11 +6,31 @@ sysinfo_payload=$(cat <<'SYSINFO_PAYLOAD'
 # Sysinfo: one lightweight entry point for Linux, BusyBox/OpenWrt and macOS.
 # Copyright (C) 2019 NorD. MIT license.
 
-# Install this running script: --install; remove the copy: --uninstall.
-# After --install, add Bash startup manually (run these two lines once):
-# sysinfo_hook='case $- in *i*) [ ! -x "$HOME/.local/bin/sysinfo.sh" ] || "$HOME/.local/bin/sysinfo.sh" --interactive-only ;; esac'
+# Default: load the current GitHub script at each interactive Bash startup.
+# Run the following commented block once in Bash; it adds one guarded line.
+# BEGIN BASH STARTUP
+# sysinfo_hook=$(cat <<'SYSINFO_BASHRC' | tr '\n' ' '
+# case $- in
+#   *i*) if [ -t 0 ] && [ -t 1 ]; then (
+#     sysinfo_url=https://raw.githubusercontent.com/nordz0r/sysinfo/master/sysinfo.sh;
+#     if command -v curl >/dev/null 2>&1; then
+#       sysinfo_code=$(curl -fsSL --connect-timeout 2 --max-time 5 "$sysinfo_url") || exit;
+#     elif command -v wget >/dev/null 2>&1; then
+#       sysinfo_args=(-qO- -T5);
+#       if wget --help 2>&1 | grep -q -- --tries; then sysinfo_args+=(-t1); fi;
+#       sysinfo_code=$(wget "${sysinfo_args[@]}" "$sysinfo_url") || exit;
+#     else
+#       printf '%s\n' 'sysinfo: install curl or wget for GitHub startup.' >&2; exit 1;
+#     fi;
+#     [ -n "$sysinfo_code" ] && "$BASH" -c "$sysinfo_code" sysinfo.sh --interactive-only;
+#   ) || :; fi ;;
+# esac
+# SYSINFO_BASHRC
+# )
 # grep -qxF "$sysinfo_hook" "$HOME/.bashrc" 2>/dev/null || printf '\n%s\n' "$sysinfo_hook" >> "$HOME/.bashrc"
-# Installation never changes .bashrc; all collection/rendering stays here.
+# END BASH STARTUP
+# Offline option B: --install saves a local executable; see README for its hook.
+# --install/--uninstall never edit .bashrc; all collection/rendering stays here.
 
 # POSIX syntax also works with the system Bash 3.2 on macOS.
 # Decide on Unicode bars before forcing the C locale for parsing.

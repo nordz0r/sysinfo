@@ -28,8 +28,7 @@ usage, and IP addresses. Terminal labels stay in English across servers and rout
 - **Compact output:** up to four filesystems and three interfaces by default; OpenWrt shows all active IPv4 interfaces.
 - **Optional installation:** run immediately without flags; save a local copy only with `--install`.
 
-**Contents:** [Quick start](#quick-start) · [Installation](#installation-and-removal) ·
-[Bash startup](#bash-startup) · [Options](#options) · [Compatibility](#compatibility) · [Development](#development)
+**Contents:** [Quick start](#quick-start) · [Bash startup](#bash-startup) · [Options](#options) · [Compatibility](#compatibility) · [Development](#development)
 
 ## Quick start
 
@@ -46,49 +45,84 @@ wget -qO- https://raw.githubusercontent.com/nordz0r/sysinfo/master/sysinfo.sh | 
 Use a trusted source and review the code before execution. The script prints
 current information and exits without installing a copy.
 
-## Installation and removal
+## Bash startup
 
-Save an executable copy to `~/.local/bin/sysinfo.sh`:
+### Option A — GitHub, the default
+
+Run this block once in Bash. It adds one guarded line to `~/.bashrc`,
+checking for duplicates. No local script installation is needed.
+
+```bash
+sysinfo_hook=$(cat <<'SYSINFO_BASHRC' | tr '\n' ' '
+case $- in
+  *i*) if [ -t 0 ] && [ -t 1 ]; then (
+    sysinfo_url=https://raw.githubusercontent.com/nordz0r/sysinfo/master/sysinfo.sh;
+    if command -v curl >/dev/null 2>&1; then
+      sysinfo_code=$(curl -fsSL --connect-timeout 2 --max-time 5 "$sysinfo_url") || exit;
+    elif command -v wget >/dev/null 2>&1; then
+      sysinfo_args=(-qO- -T5);
+      if wget --help 2>&1 | grep -q -- --tries; then sysinfo_args+=(-t1); fi;
+      sysinfo_code=$(wget "${sysinfo_args[@]}" "$sysinfo_url") || exit;
+    else
+      printf '%s\n' 'sysinfo: install curl or wget for GitHub startup.' >&2; exit 1;
+    fi;
+    [ -n "$sysinfo_code" ] && "$BASH" -c "$sysinfo_code" sysinfo.sh --interactive-only;
+  ) || :; fi ;;
+esac
+SYSINFO_BASHRC
+)
+grep -qxF "$sysinfo_hook" "$HOME/.bashrc" 2>/dev/null || printf '\n%s\n' "$sysinfo_hook" >> "$HOME/.bashrc"
+```
+
+Each interactive Bash startup fetches the current `sysinfo.sh` from GitHub
+and runs it from memory. No script file is saved. It prefers `curl`, falls back
+to `wget` when curl is absent, and suggests installing a downloader if neither exists.
+
+Fetching starts only in interactive Bash with terminal stdin and stdout.
+The fetched script checks these descriptors again through `--interactive-only`.
+Non-interactive `ssh host command`, `scp`, cron jobs, and redirected output
+stay free of the summary.
+
+`curl` has a total timeout of 5 seconds. `wget` uses a 5-second network
+timeout and one attempt when that option is supported. Failed or empty downloads
+are never executed, and Bash startup continues.
+
+Replace an older sysinfo startup line before adding this one.
+Choose either A or B to avoid running the summary twice.
+
+<details>
+<summary><strong>Option B — local installation for offline use</strong></summary>
+
+If GitHub is unavailable or a network request at login is unwanted, save a copy
+to `~/.local/bin/sysinfo.sh`:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/nordz0r/sysinfo/master/sysinfo.sh | bash -s -- --install
 ```
 
-Directories are created as needed and the file gets mode `755`. Reinstalling
-atomically updates a managed copy. Unrelated files and symlinks at the target
-are preserved. The script does not download itself again.
+Directories are created as needed, and the file gets mode `755`.
+A managed copy is updated atomically; unrelated files and symlinks at the target
+are preserved. Installation does not edit the shell profile.
 
-Run the installed copy or remove it:
+For local startup, add this line instead of option A:
+
+```bash
+sysinfo_local_hook='case $- in *i*) [ ! -x "$HOME/.local/bin/sysinfo.sh" ] || "$HOME/.local/bin/sysinfo.sh" --interactive-only ;; esac'
+grep -qxF "$sysinfo_local_hook" "$HOME/.bashrc" 2>/dev/null || printf '\n%s\n' "$sysinfo_local_hook" >> "$HOME/.bashrc"
+```
+
+Run or remove the installed copy:
 
 ```sh
 "$HOME/.local/bin/sysinfo.sh"
 "$HOME/.local/bin/sysinfo.sh" --uninstall
 ```
 
-Removal deletes only the script. Directories and shell settings remain intact.
+Removal deletes only the script. Directories and shell settings remain intact;
+the local startup line silently skips the missing executable.
 From a checkout, use `sh sysinfo.sh --install` or `sh sysinfo.sh --uninstall`.
 
-## Bash startup
-
-After installation, run these two lines:
-
-```bash
-sysinfo_hook='case $- in *i*) [ ! -x "$HOME/.local/bin/sysinfo.sh" ] || "$HOME/.local/bin/sysinfo.sh" --interactive-only ;; esac'
-grep -qxF "$sysinfo_hook" "$HOME/.bashrc" 2>/dev/null || printf '\n%s\n' "$sysinfo_hook" >> "$HOME/.bashrc"
-```
-
-The command adds the line to `~/.bashrc` once and creates the file if needed.
-Startup has two checks:
-
-1. `case $-` allows execution only in an interactive Bash shell.
-2. `--interactive-only` checks inside the script that stdin and stdout are terminals.
-
-This keeps non-interactive `ssh host command`, `scp`, cron jobs, and redirected
-output clear of the summary. Direct execution without this flag, including
-`curl | bash`, still works. `--install` itself does not edit `~/.bashrc`.
-
-After uninstalling, the startup line silently skips the missing executable.
-Replace any older sysinfo startup line with this one to avoid duplicate output.
+</details>
 
 ## Options
 
