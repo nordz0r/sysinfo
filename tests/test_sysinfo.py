@@ -1,6 +1,8 @@
 """Functional checks for the single entry point; no third-party test packages."""
 import os
+import errno
 from pathlib import Path
+import pty
 import re
 import shlex
 import shutil
@@ -10,7 +12,6 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 COMMON = ROOT / "sysinfo.sh"
-COMPAT = ROOT / "sysinfo_v2.sh"
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
 DISKS = """Filesystem 1024-blocks Used Available Capacity Mounted on
@@ -75,8 +76,6 @@ class Fixture:
             self.files[original] = file
             source = source.replace(original, str(file))
         self.common.write_text(source)
-        self.compat = self.root / "sysinfo_v2.sh"
-        self.compat.write_text(source)
         self.env = {**{k: v for k, v in os.environ.items() if k != "LANG" and not k.startswith("LC_")}, "PATH": str(self.bin), "TERM": "xterm", "LANG": "C",
                     "SYSINFO_COMMAND_LOG": str(self.log)}
         self.shell = os.environ.get("SYSINFO_TEST_SH", "/bin/sh")
@@ -114,11 +113,36 @@ Pages speculative: 1.
                               f"printf '%s' {shlex.quote(output)}\nexit {status}\n")
         executable.chmod(0o755)
 
-    def run(self, *args, wrapper=False, piped=False):
-        path = self.compat if wrapper else self.common
-        cmd = [self.shell, "-s", "--"] if piped else [self.shell, str(path)]
-        return subprocess.run([*cmd, *args], input=path.read_text() if piped else None,
+    def run(self, *args, piped=False):
+        cmd = [self.shell, "-s", "--"] if piped else [self.shell, str(self.common)]
+        return subprocess.run([*cmd, *args], input=self.common.read_text() if piped else None,
                               capture_output=True, text=True, env=self.env, timeout=10)
+
+    def terminal(self, command, tty_input=True):
+        master, slave = pty.openpty()
+        try:
+            try:
+                result = subprocess.run(command, env=self.env,
+                                        stdin=slave if tty_input else subprocess.DEVNULL,
+                                        stdout=slave, stderr=subprocess.PIPE, timeout=10)
+            finally:
+                os.close(slave)
+            chunks = []
+            while True:
+                try:
+                    chunk = os.read(master, 4096)
+                except OSError as error:
+                    if error.errno != errno.EIO:
+                        raise
+                    break
+                if not chunk:
+                    break
+                chunks.append(chunk)
+            return subprocess.CompletedProcess(command, result.returncode,
+                                               b"".join(chunks).decode().replace("\r\n", "\n"),
+                                               result.stderr.decode())
+        finally:
+            os.close(master)
 
     def close(self):
         self.tmp.cleanup()
@@ -340,10 +364,9 @@ class SysinfoTests(unittest.TestCase):
         self.table(p)
         self.assertIn("sudo apt install curl", p.stderr)
 
-    def test_compat_is_identical_and_runs_without_extra_downloads(self):
-        self.assertEqual(COMMON.read_bytes(), COMPAT.read_bytes())
+    def test_piped_run_uses_no_downloader(self):
         f = self.fixture()
-        p = f.run("--help", wrapper=True)
+        p = f.run("--help")
         self.assertEqual(p.returncode, 0)
         self.assertIn("Usage:", p.stdout)
         self.assertFalse(f.log.exists())
@@ -351,7 +374,7 @@ class SysinfoTests(unittest.TestCase):
             if downloader == "wget":
                 (f.bin / "curl").unlink()
                 f.command("wget")
-            self.table(f.run(wrapper=True, piped=True))
+            self.table(f.run(piped=True))
         self.assertNotIn("curl:", f.log.read_text())
         self.assertNotIn("wget:", f.log.read_text())
         self.assertFalse(f.home.exists())
@@ -388,15 +411,15 @@ class SysinfoTests(unittest.TestCase):
             f.home.mkdir()
             profile = f.home / ".bashrc"
             profile.write_text("# existing user configuration\n")
-            for wrapper in (False, True):
-                p = f.run("--install", piped=True, wrapper=wrapper)
+            for _ in range(2):
+                p = f.run("--install", piped=True)
                 self.assertEqual(p.returncode, 0, p.stderr)
                 self.assertEqual(f.target.read_bytes(), f.common.read_bytes())
                 self.assertEqual(profile.read_text(), "# existing user configuration\n")
                 p = subprocess.run([str(f.target)], env=f.env,
                                    capture_output=True, text=True, timeout=10)
                 self.table(p)
-                p = f.run("--uninstall", piped=True, wrapper=wrapper)
+                p = f.run("--uninstall", piped=True)
                 self.assertEqual(p.returncode, 0, p.stderr)
                 self.assertFalse(f.target.exists())
                 self.assertTrue(f.target.parent.is_dir())
@@ -483,6 +506,10 @@ class SysinfoTests(unittest.TestCase):
         profile.write_text("# existing user configuration")
         integration = "\n".join(line[2:] for line in COMMON.read_text().splitlines()
                                 if line.startswith(("# sysinfo_hook=", "# grep -qxF")))
+        for name in ("README.md", "README.en.md"):
+            blocks = re.findall(r"\x60{3}bash\n(.*?)\n\x60{3}", (ROOT / name).read_text(), re.S)
+            documented = next(block for block in blocks if "sysinfo_hook=" in block)
+            self.assertEqual(documented, integration, name)
         integration = integration.replace("$HOME/.local/bin/sysinfo.sh", str(f.target))
         integration = integration.replace("$HOME/.bashrc", str(profile))
         for _ in range(2):
@@ -493,7 +520,59 @@ class SysinfoTests(unittest.TestCase):
         self.assertTrue(profile.read_text().startswith("# existing user configuration\n"))
         p = subprocess.run(["/bin/bash", str(profile)], env=f.env,
                            capture_output=True, text=True, timeout=10)
-        self.table(p)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(p.stdout, "")
+        result = f.terminal(["/bin/bash", "--noprofile", "--norc", "-i", "-c",
+                             'source "$1"', "sysinfo-startup", str(profile)])
+        self.table(result)
+
+    def test_interactive_only_skips_nonterminal_and_pipe_runs(self):
+        f = self.fixture()
+        for piped in (False, True):
+            result = f.run("--interactive-only", piped=piped)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout, "")
+            self.assertEqual(result.stderr, "")
+            self.assertFalse(f.log.exists())
+        self.assertFalse(f.home.exists())
+
+    def test_interactive_only_checks_both_terminals(self):
+        f = self.fixture()
+        self.table(f.terminal([f.shell, str(f.common), "--interactive-only"]))
+        f.log.unlink()
+        result = f.terminal([f.shell, str(f.common), "--interactive-only"], tty_input=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "")
+        self.assertFalse(f.log.exists())
+        master, slave = pty.openpty()
+        try:
+            result = subprocess.run([f.shell, str(f.common), "--interactive-only"],
+                                    env=f.env, stdin=slave, stdout=subprocess.PIPE,
+                                    stderr=subprocess.PIPE, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout, b"")
+            self.assertFalse(f.log.exists())
+        finally:
+            os.close(slave)
+            os.close(master)
+
+    def test_noninteractive_bash_hook_stays_silent_even_with_terminals(self):
+        f = self.fixture()
+        self.assertEqual(f.run("--install").returncode, 0)
+        integration = next(line[2:] for line in COMMON.read_text().splitlines()
+                           if line.startswith("# sysinfo_hook="))
+        integration = integration.replace("$HOME/.local/bin/sysinfo.sh", str(f.target))
+        result = f.terminal(["/bin/bash", "--noprofile", "--norc", "-c",
+                             integration + '\neval "$sysinfo_hook"'])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "")
+        self.assertFalse(f.log.exists())
+
+    def test_interactive_guard_does_not_prevent_explicit_install(self):
+        f = self.fixture()
+        result = f.run("--install", "--interactive-only", piped=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(f.target.is_file())
 
     def test_failed_disk_query_does_not_report_success(self):
         f = self.fixture()

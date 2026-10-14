@@ -8,7 +8,7 @@ sysinfo_payload=$(cat <<'SYSINFO_PAYLOAD'
 
 # Install this running script: --install; remove the copy: --uninstall.
 # After --install, add Bash startup manually (run these two lines once):
-# sysinfo_hook='[ ! -x "$HOME/.local/bin/sysinfo.sh" ] || "$HOME/.local/bin/sysinfo.sh"'
+# sysinfo_hook='case $- in *i*) [ ! -x "$HOME/.local/bin/sysinfo.sh" ] || "$HOME/.local/bin/sysinfo.sh" --interactive-only ;; esac'
 # grep -qxF "$sysinfo_hook" "$HOME/.bashrc" 2>/dev/null || printf '\n%s\n' "$sysinfo_hook" >> "$HOME/.bashrc"
 # Installation never changes .bashrc; all collection/rendering stays here.
 
@@ -22,15 +22,6 @@ case "$sysinfo_locale" in
     '') case "${TERM:-}" in xterm*|screen*|tmux*|rxvt*|alacritty|foot*|wezterm|vt220|linux) utf8=1 ;; esac ;;
 esac
 case "${SYSINFO_UTF8:-}" in 1) utf8=1 ;; 0) utf8=0 ;; esac
-# Terminal width caps the separators (0 = unknown).
-cols=${COLUMNS:-0}
-case "$cols" in ''|*[!0-9]*) cols=0 ;; esac
-if [ "$cols" = 0 ] && [ -t 1 ] && command -v tput >/dev/null 2>&1; then
-    cols=$(tput cols 2>/dev/null) || cols=0
-    case "$cols" in ''|*[!0-9]*) cols=0 ;; esac
-fi
-openwrt=0
-[ -s /etc/openwrt_release ] && openwrt=1
 LC_ALL=C
 export LC_ALL
 set -f
@@ -38,6 +29,7 @@ details=0
 all_interfaces=0
 color=auto
 action=report
+interactive_only=0
 for arg do
     case "$arg" in
         --install|--uninstall)
@@ -48,12 +40,15 @@ for arg do
             action=$arg ;;
         --details) details=1; all_interfaces=1 ;;
         --all-interfaces) all_interfaces=1 ;;
+        --interactive-only) interactive_only=1 ;;
         --no-color) color=never ;;
         --color) color=always ;;
         -h|--help)
-            printf '%s\n' 'Usage: sysinfo.sh [--install|--uninstall] [--details] [--all-interfaces] [--color|--no-color]' \
-                'Default: three local filesystems, two interfaces, Docker hidden.' \
+            printf '%s\n' 'Usage: sysinfo.sh [--install|--uninstall] [--details] [--all-interfaces]' \
+                '                  [--interactive-only] [--color|--no-color]' \
+                'Default: four local filesystems, three interfaces (all on OpenWrt).' \
                 '--details: show all local filesystems and interfaces.' \
+                '--interactive-only: print only when stdin and stdout are terminals.' \
                 '--install: save an executable copy to ~/.local/bin/sysinfo.sh.' \
                 '--uninstall: remove that copy; leave the directories in place.'
             exit 0 ;;
@@ -132,6 +127,22 @@ if [ "$action" != report ]; then
     printf 'Installed: %s\n' "$install_target"
     exit 0
 fi
+
+# The parent shell checks its interactive flag in the .bashrc hook. A script
+# itself runs in a non-interactive child shell, so check terminal descriptors.
+if [ "$interactive_only" -eq 1 ] && { [ ! -t 0 ] || [ ! -t 1 ]; }; then
+    exit 0
+fi
+
+# Terminal width caps the separators (0 = unknown).
+cols=${COLUMNS:-0}
+case "$cols" in ''|*[!0-9]*) cols=0 ;; esac
+if [ "$cols" = 0 ] && [ -t 1 ] && command -v tput >/dev/null 2>&1; then
+    cols=$(tput cols 2>/dev/null) || cols=0
+    case "$cols" in ''|*[!0-9]*) cols=0 ;; esac
+fi
+openwrt=0
+[ -s /etc/openwrt_release ] && openwrt=1
 
 for tool in uname awk df; do
     if ! command -v "$tool" >/dev/null 2>&1; then

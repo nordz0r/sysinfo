@@ -2,169 +2,170 @@
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset=".github/assets/banner-dark.svg">
     <source media="(prefers-color-scheme: light)" srcset=".github/assets/banner-light.svg">
-    <img alt="nordz0r/sysinfo — system summary" src=".github/assets/banner-light.svg" width="100%">
+    <img alt="nordz0r/sysinfo — сводка о системе" src=".github/assets/banner-light.svg" width="100%">
   </picture>
 </p>
 
-One lightweight script that detects its platform and prints a compact English
-table. `sysinfo.sh` handles Linux (including Debian and OpenWrt/BusyBox) and macOS.
-It works with POSIX `sh`, BusyBox `ash`, and Bash, including macOS's system Bash.
+<p align="center"><b>Русский</b> · <a href="README.en.md">English</a></p>
 
-## Usage
+<p align="center">
+  <strong>Сводка о системе одной командой.</strong><br>
+  Linux, macOS и OpenWrt — один лёгкий скрипт, без фоновых процессов.
+</p>
 
-From a checkout:
+<p align="center">
+  <img alt="POSIX shell" src="https://img.shields.io/badge/shell-POSIX%20sh%20%2F%20Bash-4eaa25?style=flat-square&logo=gnubash&logoColor=white">
+  <img alt="Linux, macOS, OpenWrt" src="https://img.shields.io/badge/Linux%20%7C%20macOS%20%7C%20OpenWrt-supported-0969da?style=flat-square">
+  <img alt="BusyBox" src="https://img.shields.io/badge/BusyBox-compatible-00b5e2?style=flat-square">
+  <a href="LICENSE"><img alt="Лицензия MIT" src="https://img.shields.io/badge/license-MIT-blue?style=flat-square"></a>
+</p>
+
+**sysinfo** показывает ОС, ядро, процессор, uptime, load average, RAM, swap,
+занятость дисков и IP-адреса. Вывод остаётся на английском, чтобы одинаково
+читаться в терминалах на серверах и роутерах.
+
+- **Быстрый запуск:** системные утилиты, без Python, Node.js и обращения к сети при локальном запуске.
+- **Наглядные ресурсы:** полоски заполнения и цветовые предупреждения о нехватке места.
+- **Компактный вывод:** до четырёх файловых систем и трёх интерфейсов по умолчанию; для OpenWrt показываются все активные IPv4-интерфейсы.
+- **Установка по желанию:** без ключей скрипт выполняется сразу, локальная копия создаётся только с `--install`.
+
+**Содержание:** [Быстрый старт](#быстрый-старт) · [Установка](#установка-и-удаление) ·
+[Автозапуск в Bash](#автозапуск-в-bash) · [Параметры](#параметры) · [Совместимость](#совместимость) · [Разработка](#разработка)
+
+## Быстрый старт
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/nordz0r/sysinfo/master/sysinfo.sh | bash
+```
+
+Или через `wget`:
+
+```sh
+wget -qO- https://raw.githubusercontent.com/nordz0r/sysinfo/master/sysinfo.sh | sh
+```
+
+Используйте доверенный источник и просмотрите код перед запуском. Скрипт выводит
+текущие данные и завершается, ничего не устанавливая.
+
+## Установка и удаление
+
+Сохраните исполняемую копию в `~/.local/bin/sysinfo.sh`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/nordz0r/sysinfo/master/sysinfo.sh | bash -s -- --install
+```
+
+Каталоги создаются при необходимости, файл получает права `755`. При повторной
+установке собственная копия обновляется атомарно. Посторонние файлы и символьные
+ссылки в целевом пути сохраняются; повторной загрузки внутри скрипта нет.
+
+Запуск установленной копии и удаление:
+
+```sh
+"$HOME/.local/bin/sysinfo.sh"
+"$HOME/.local/bin/sysinfo.sh" --uninstall
+```
+
+Удаляется только файл скрипта. Каталоги и настройки оболочки остаются на месте.
+Из локального checkout также доступны `sh sysinfo.sh --install` и `sh sysinfo.sh --uninstall`.
+
+## Автозапуск в Bash
+
+После установки выполните эти две строки:
+
+```bash
+sysinfo_hook='case $- in *i*) [ ! -x "$HOME/.local/bin/sysinfo.sh" ] || "$HOME/.local/bin/sysinfo.sh" --interactive-only ;; esac'
+grep -qxF "$sysinfo_hook" "$HOME/.bashrc" 2>/dev/null || printf '\n%s\n' "$sysinfo_hook" >> "$HOME/.bashrc"
+```
+
+Команда добавляет строку в `~/.bashrc` один раз и создаёт файл, если его ещё нет.
+Проверки выполняются на двух уровнях:
+
+1. `case $-` разрешает автозапуск только в интерактивном Bash.
+2. `--interactive-only` внутри скрипта проверяет, что stdin и stdout подключены к терминалу.
+
+Так сводка не появляется в неинтерактивных `ssh host command`, `scp`, заданиях cron
+и выводе, перенаправленном в файл. Прямой запуск без этого ключа, включая
+`curl | bash`, по-прежнему работает. Сам `--install` не редактирует `~/.bashrc`.
+
+После удаления скрипта строка автозапуска молча пропускается. Если ранее добавляли
+другую строку запуска sysinfo, замените её новой, чтобы не получать двойной вывод.
+
+## Параметры
+
+| Ключ | Действие |
+| --- | --- |
+| `--install` | Создать или обновить `~/.local/bin/sysinfo.sh`. |
+| `--uninstall` | Удалить установленную копию. |
+| `--interactive-only` | Выводить сводку только при stdin/stdout, подключённых к терминалу. |
+| `--details` | Показать все выбранные локальные файловые системы и IPv4-интерфейсы. |
+| `--all-interfaces` | Показать все IPv4-интерфейсы, включая виртуальные. |
+| `--color` / `--no-color` | Принудительно включить или выключить ANSI-цвета. |
+| `--help` | Показать справку. |
+
+### Полоски и цвета
+
+| Заполненность | Цвет |
+| --- | --- |
+| Менее 80% | Зелёный |
+| От 80% до 94% | Жёлтый |
+| От 95% | Красный и знак `!` |
+
+Проценты берутся из `df`, с учётом доступного места и резерва файловой системы.
+Размеры не складываются; повторные монтирования скрываются. Цвет автоматически
+отключается при перенаправлении вывода, `TERM=dumb` или установленном `NO_COLOR`.
+
+В UTF-8 используются ровные символы `█`/`░`, иначе — `=`/`-`.
+На OpenWrt без настроенной локали UTF-8 определяется по типу терминала;
+переопределение доступно через `SYSINFO_UTF8=1` или `SYSINFO_UTF8=0`.
+Длина разделителей учитывает вывод и ширину терминала (`COLUMNS`).
+
+## Совместимость
+
+| Среда | Особенности |
+| --- | --- |
+| Linux / Debian | Данные из `/proc`, локальные диски через `df`, сеть через `ip` или `ifconfig`. Docker и другие служебные виртуальные интерфейсы по умолчанию скрыты. |
+| OpenWrt / BusyBox | Достаточно `ash`, `awk`, `df` и `ip`; Bash не требуется. Показываются все активные IPv4-интерфейсы, SoC/ARM CPU и модель платы, если данные доступны. |
+| macOS | Используются штатные `sysctl`, `vm_stat`, `sw_vers`, BSD `df` и `ifconfig`. |
+
+Базовые зависимости — `sh`, `cat`, `uname`, `awk`, `df`. Для установки нужны
+`mkdir`, `mktemp`, `chmod`, `mv` и `rm`. Локальный запуск не требует `curl`/`wget`;
+при отсутствии обоих скрипт подсказывает команду установки загрузчика.
+
+На OpenWrt `/overlay` не дублирует корневую файловую систему, `/tmp` показывается
+отдельно, неизменяемый squashfs пропускается. Штатный `ash` не читает `~/.bashrc`:
+для него аналогичную проверку `case $-` размещают в `~/.profile`.
+
+macOS проверена на образцах вывода системных команд; проверка на настоящем Mac
+остаётся необходимой. Расчёт RAM через `vm_stat` — оценка занятости, не показатель
+memory pressure из Activity Monitor.
+
+<details>
+<summary><strong>Переход со старой версии</strong></summary>
+
+Единственная точка входа — `sysinfo.sh`. Старый `sysinfo_v2.sh` удалён;
+замените его имя в URL или локальных командах на `sysinfo.sh`.
+Полного примера `.bashrc` в репозитории больше нет: используйте короткую команду
+из раздела автозапуска, сохраняя собственные настройки оболочки.
+
+</details>
+
+## Разработка
 
 ```sh
 sh sysinfo.sh
 sh sysinfo.sh --details
-```
-
-Run from the remote entry point without saving a file:
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/nordz0r/sysinfo/master/sysinfo.sh | sh
-# Alternatively:
-wget -qO- https://raw.githubusercontent.com/nordz0r/sysinfo/master/sysinfo.sh | sh
-```
-
-Use a trusted source; review the script before executing it. Without an install
-flag the script collects current information immediately and saves no copy.
-
-Local execution needs `cat`, `uname`, `awk`, and `df`, which are normally system tools.
-Linux uses `/proc`; macOS uses `sysctl`, `vm_stat`, `sw_vers`, and `date`.
-Network information uses `ip` when available on Linux, otherwise `ifconfig`.
-Missing optional data is marked as unavailable.
-
-`curl` or `wget` is only required for downloading. If neither is available, the
-script suggests installation and still collects local information.
-On Debian use `sudo apt install curl`; on OpenWrt use `opkg install curl` or
-`apk add curl`, depending on the release. macOS includes `/usr/bin/curl`.
-Bash does not need to be installed on OpenWrt.
-
-The old `sysinfo_v2.sh` URL contains a generated, identical compatibility copy.
-It runs directly without fetching a second script. Existing `| bash` invocations
-still work. All implementation changes belong in `sysinfo.sh`; synchronize the
-compatibility copy with `cp sysinfo.sh sysinfo_v2.sh`. Tests check byte equality.
-
-## Install and uninstall
-
-Saving a local executable is optional and explicit:
-
-```sh
-sh sysinfo.sh --install
-"$HOME/.local/bin/sysinfo.sh"
-sh sysinfo.sh --uninstall
-```
-
-`--install` creates `~/.local/bin` as needed and writes `sysinfo.sh` with mode
-`755`. Reinstalling atomically updates a managed copy. Unrelated files,
-directories, and symlinks at the target are preserved and reported.
-`--uninstall` removes only the managed script, leaves directories in place, and
-succeeds if no copy is installed. Neither operation changes shell profiles.
-
-Installation also works through a pipe, without another network request:
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/nordz0r/sysinfo/master/sysinfo.sh | sh -s -- --install
-# Alternatively:
-wget -qO- https://raw.githubusercontent.com/nordz0r/sysinfo/master/sysinfo.sh | sh -s -- --install
-```
-
-To enable the installed copy at every Bash startup, run the manual commands
-shown in the script header. The startup line invokes the script; all collection
-and rendering functions remain inside it:
-
-```sh
-sysinfo_hook='[ ! -x "$HOME/.local/bin/sysinfo.sh" ] || "$HOME/.local/bin/sysinfo.sh"'
-grep -qxF "$sysinfo_hook" "$HOME/.bashrc" 2>/dev/null || printf '\n%s\n' "$sysinfo_hook" >> "$HOME/.bashrc"
-```
-
-The command adds the line once and handles a missing `.bashrc`. After uninstall,
-the startup line silently does nothing; it can be removed manually if desired.
-
-## Output
-
-A compact `Label : value` list (about 12-17 lines), no table borders, thin
-dashed separators:
-
-```
---------------------------------------------------------
-Hostname   : dd.goldfinches.ru
-OS         : Debian GNU/Linux 12 (bookworm), x86_64, 6.1.0-52-amd64
-CPU        : 4 × Intel Core i5-10400 @ 2.90GHz
-Uptime     : 6d 23h 37m
-Load       : 0.17, 0.49, 0.65
---------------------------------------------------------
-RAM        : █████████████████░░░  84%    8.1G / 9.7G
-Swap       : █████░░░░░░░░░░░░░░░  27%    1.1G / 4.0G
-
-/          : ███████████████░░░░░  75%    34.8G / 49.0G
-/mnt/hdd   : ███████████████████░  95% !  87.4G / 97.9G
-/mnt/iscsi : ███████████░░░░░░░░░  56%    76.3G / 143.6G
---------------------------------------------------------
-IP         : ens160 10.0.0.118
---------------------------------------------------------
-```
-
-- OS line also carries the architecture and kernel; load average has its own line.
-- CPU model is cleaned of `(R)`, `(TM)` and the word `CPU`.
-- RAM and swap, then (after a blank line) up to four local filesystems (root first, then the fullest).
-  Container/kubelet bind mounts, `/run`, WSL helper mounts and read-only
-  images are skipped. `--details` shows every filesystem.
-- Separators follow the longest line, capped by the terminal width (`COLUMNS`/`tput cols`).
-- Filesystems with identical size and usage (e.g. `/` and `/overlay`) are shown once.
-- IP: up to three `interface address` pairs, default route first (all on OpenWrt);
-  one interface per line when they do not fit.
-  Docker and overlay interfaces (`docker*`, `br-<hex>`, `veth*`, `flannel*`,
-  `cni*`, `cali*`, `vxlan*`, ...) are hidden unless `--all-interfaces`.
-
-Bars use full blocks `█` with a dim `░` remainder when the locale is UTF-8, or when
-no locale is set and `TERM` is a common UTF-8 terminal (OpenWrt); `SYSINFO_UTF8=0|1`
-overrides (no
-fractional blocks: they render unevenly in many fonts) and fall back to ASCII
-(`=`/`-`) otherwise. Colors: green below **80%**, yellow from 80%, red with `!`
-from **95%**.
-Percentages come from `df`, accounting for available space and filesystem
-reserves, rather than being recomputed from rounded display sizes.
-
-Disk capacities are not summed: repeated mounts of the same device are deduplicated,
-and APFS volumes are displayed individually without adding shared capacity.
-Linux queries recognized local filesystem types from `/proc/self/mounts`; macOS
-uses BSD `df -l`. Network mounts, memory filesystems, and immutable squashfs
-firmware images are excluded on Linux.
-Sizes use KiB/MiB/GiB. macOS RAM usage is an estimate from `vm_stat`, not Activity
-Monitor's memory-pressure measurement.
-
-| Option | Behavior |
-| --- | --- |
-| `--install` | Save an executable copy to `~/.local/bin/sysinfo.sh`. |
-| `--uninstall` | Remove only the managed local copy. |
-| `--details` | Show all selected local filesystems and all IPv4 interfaces, including Docker. |
-| `--all-interfaces` | Expand only the network list, including Docker. |
-| `--color` | Force ANSI colors. |
-| `--no-color` | Disable ANSI colors. |
-| `--help` | Show usage. |
-
-Colors are enabled automatically only for a terminal, unless `TERM=dumb` or
-`NO_COLOR` is set. Long labels and values are shortened to preserve table width.
-Local execution makes no network requests, uses one `awk` process for parsing
-and rendering, and invokes `df` and the network tool once.
-
-## Validation
-
-The functional suite needs Python 3 and no third-party packages:
-
-```sh
 python3 -m unittest discover -s tests -v
 ```
 
-It covers live Linux execution, macOS/OpenWrt command-output fixtures, warning
-thresholds, compact limits with 100 disks and interfaces, missing tools, and
-transient pipe execution, self-install/uninstall, and unchanged shell profiles.
-macOS fixtures do not replace testing on a real Mac.
+Тесты проверяют Linux, образцы macOS/OpenWrt, интерактивный Bash с терминалом,
+молчаливый неинтерактивный запуск, повторную установку и удаление, сохранность
+профилей и поведение при отказах записи.
 
-To repeat the fixture suite with actual BusyBox applets, point these variables at
-its `sh` and `awk` applet symlinks (named `sh` and `awk`):
+<details>
+<summary><strong>Дополнительные проверки</strong></summary>
+
+Проверка на настоящих апплетах BusyBox:
 
 ```sh
 SYSINFO_TEST_SH=/path/to/busybox-bin/sh \
@@ -172,33 +173,16 @@ SYSINFO_TEST_AWK=/path/to/busybox-bin/awk \
 python3 -m unittest discover -s tests -v
 ```
 
-Optional lint for the entry point and embedded implementation:
+ShellCheck для точки входа и встроенного кода:
 
 ```sh
-shellcheck sysinfo.sh sysinfo_v2.sh
+shellcheck sysinfo.sh
 awk 'BEGIN { print "sysinfo_payload=" } /^sysinfo_payload=\$\(cat/ { body=1; next } /^SYSINFO_PAYLOAD$/ { exit } body' sysinfo.sh | shellcheck -s sh -
 ```
 
-## License
+</details>
 
-MIT, see [LICENSE](LICENSE).
+## Лицензия
 
-## OpenWrt
-
-BusyBox `ash`/`awk`/`df`/`ip` are enough; nothing to install. On OpenWrt the
-overlay upper dir (`/overlay`, same space as `/`) is hidden, `/tmp` (tmpfs) is
-shown, ARM CPUs are named from `CPU part` (e.g. `ARM Cortex-A53`) plus the board
-from `/tmp/sysinfo/model`; the SoC comes from the device tree, e.g.
-`2 × MediaTek MT7981 (Cudy WBR3000UAX v1)`.
-
-Offline-safe autostart for interactive logins only (keeps `scp`/`ssh host cmd` clean):
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/nordz0r/sysinfo/master/sysinfo.sh -o /usr/bin/sysinfo
-chmod 755 /usr/bin/sysinfo
-cat > /etc/profile.d/90-sysinfo.sh <<'X'
-case $- in *i*) [ -t 1 ] && [ -x /usr/bin/sysinfo ] && /usr/bin/sysinfo ;; esac
-X
-printf '%s\n' /usr/bin/sysinfo /etc/profile.d/90-sysinfo.sh >> /etc/sysupgrade.conf
-```
+[MIT](LICENSE) © NorD.
 
