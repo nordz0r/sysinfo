@@ -233,9 +233,9 @@ SYSINFO_LEGACY_BASHRC
             # shellcheck disable=SC2016
             printf '{ [[ $- == *i* && -t 0 && -t 1 && -x %s ]] && %s --interactive-only; } || :\n' "$setup_local_target" "$setup_local_target"
         else
-            # Keep stdin attached to the terminal and discard failed downloads.
+            # The parent checks the terminal before streaming into Bash.
             # shellcheck disable=SC2016
-            printf '{ [[ $- == *i* && -t 0 && -t 1 ]] && (sysinfo_code=$(%s) && [ -n "$sysinfo_code" ] && "$BASH" -c "$sysinfo_code" sysinfo.sh --interactive-only); } || :\n' "$setup_fetch"
+            printf '{ [[ $- == *i* && -t 0 && -t 1 ]] && %s | bash; } || :\n' "$setup_fetch"
         fi
         printf '%s\n' '# <<< sysinfo <<<'
     } >> "$setup_tmp"; then

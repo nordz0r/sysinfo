@@ -586,9 +586,10 @@ class SysinfoTests(unittest.TestCase):
             self.assertNotIn("--help", f.log.read_text())
             self.assertFalse(f.target.exists())
 
-    def test_github_startup_skips_failed_partial_and_empty_downloads(self):
-        for content, status in (("", 0), ("printf SHOULD_NOT_RUN", 22), ("", 28)):
+    def test_github_startup_continues_after_empty_failed_and_truncated_downloads(self):
+        for status in (0, 22, 18, 28):
             f = self.fixture()
+            content = f.common.read_text()[:4096] if status == 18 else ""
             f.command("curl", content, status)
             profile = self.startup_profile(f)
             result = f.terminal(["/bin/bash", "--noprofile", "--norc", "-i", "-c",
@@ -797,8 +798,9 @@ class SysinfoTests(unittest.TestCase):
                 self.assertTrue(content.startswith("\n# >>> sysinfo >>>\n"))
                 commands = [line for line in content.splitlines() if line and not line.startswith("#")]
                 self.assertEqual(len(commands), 1)
-                self.assertIn(f"sysinfo_code=$({downloader} ", commands[0])
-                for fragment in ("if ", "then", "else", "command -v", "sysinfo_url", "sysinfo_proxy"):
+                self.assertIn(f"&& {downloader} ", commands[0])
+                self.assertIn(" | bash; } || :", commands[0])
+                for fragment in ("if ", "then", "else", "command -v", "sysinfo_url", "sysinfo_proxy", "sysinfo_code", "$(", "-c ", "--interactive-only"):
                     self.assertNotIn(fragment, commands[0])
                 if f.log.exists():
                     f.log.unlink()

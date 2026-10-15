@@ -74,11 +74,12 @@ option selection happen during setup. If you remove the selected downloader,
 run `--setup-bash` again to select an available one.
 
 Fetching starts only in interactive Bash with terminal stdin and stdout.
-The fetched script checks these descriptors again through `--interactive-only`.
-Non-interactive `ssh host command`, `scp`, cron jobs, and redirected output
+The selected command pipes the script directly into `bash`, without an
+intermediate variable or saved file. The terminal check runs before the pipeline,
+so non-interactive `ssh host command`, `scp`, cron jobs, and redirected output
 stay free of the summary. `curl` has a total timeout of 5 seconds; `wget` uses
 a 5-second network timeout and one attempt when supported.
-Failed or empty downloads do not interrupt Bash startup.
+Download errors do not interrupt Bash startup.
 
 #### Using a proxy
 
