@@ -84,9 +84,10 @@ Download errors do not interrupt Bash startup.
 #### Using a proxy
 
 Specify the proxy for both the initial download and future startup downloads:
+replace `proxy.example.com:3128` with your proxy address.
 
 ```bash
-sysinfo_proxy='http://deb-proxy.lan:3128'
+sysinfo_proxy='http://proxy.example.com:3128'
 curl -fsSL --proxy "$sysinfo_proxy" https://raw.githubusercontent.com/nordz0r/sysinfo/master/sysinfo.sh | bash -s -- --setup-bash --proxy "$sysinfo_proxy"
 ```
 
@@ -97,7 +98,7 @@ with both downloaders; an `https://` proxy requires `curl`.
 For the initial download with `wget`, set `https_proxy` and `http_proxy`:
 
 ```bash
-sysinfo_proxy='http://deb-proxy.lan:3128'
+sysinfo_proxy='http://proxy.example.com:3128'
 https_proxy="$sysinfo_proxy" http_proxy="$sysinfo_proxy" wget -qO- https://raw.githubusercontent.com/nordz0r/sysinfo/master/sysinfo.sh | bash -s -- --setup-bash --proxy "$sysinfo_proxy"
 ```
 

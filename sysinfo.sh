@@ -12,7 +12,7 @@ sysinfo_payload=$(cat <<'SYSINFO_PAYLOAD'
 # curl -fsSL https://raw.githubusercontent.com/nordz0r/sysinfo/master/sysinfo.sh | bash -s -- --setup-bash
 # END BASH STARTUP
 # With a proxy (used now and saved for subsequent startup downloads):
-# sysinfo_proxy='http://deb-proxy.lan:3128'
+# sysinfo_proxy='http://proxy.example.com:3128'
 # curl -fsSL --proxy "$sysinfo_proxy" https://raw.githubusercontent.com/nordz0r/sysinfo/master/sysinfo.sh | bash -s -- --setup-bash --proxy "$sysinfo_proxy"
 # Without curl: wget -qO- <same URL> | bash -s -- --setup-bash
 # Offline option B: --install saves a local executable; see README for its hook.

@@ -648,7 +648,7 @@ class SysinfoTests(unittest.TestCase):
         original = (
             'export EDITOR=vi\n# documentation: sysinfo and other tools\n'
             '# by NorD\n'
-            f'curl -Lso- -m 3 --proxy http://deb-proxy.lan:3128 {remote} | bash\n'
+            f'curl -Lso- -m 3 --proxy http://proxy.example.com:3128 {remote} | bash\n'
             f'wget -qO- {remote.replace("sysinfo.sh", "sysinfo_v2.sh")} | sh\n'
             '[ ! -x "$HOME/.local/bin/sysinfo.sh" ] || "$HOME/.local/bin/sysinfo.sh"\n'
             'case $- in *i*) [ ! -x "$HOME/.local/bin/sysinfo.sh" ] || "$HOME/.local/bin/sysinfo.sh" --interactive-only ;; esac\n'
@@ -657,7 +657,7 @@ class SysinfoTests(unittest.TestCase):
         )
         profile.write_text(original)
         profile.chmod(0o640)
-        self.startup_profile(f, "--proxy", "http://deb-proxy.lan:3128")
+        self.startup_profile(f, "--proxy", "http://proxy.example.com:3128")
         updated = profile.read_text()
         self.assertTrue(updated.startswith('export EDITOR=vi\n# documentation: sysinfo and other tools\nalias sysinfo_notes='))
         self.assertNotIn("# by NorD", updated)
@@ -670,11 +670,11 @@ class SysinfoTests(unittest.TestCase):
         backup = f.home / ".bashrc.sysinfo.bak"
         self.assertEqual(backup.read_text(), original)
         inode = profile.stat().st_ino
-        self.startup_profile(f, "--proxy", "http://deb-proxy.lan:3128")
+        self.startup_profile(f, "--proxy", "http://proxy.example.com:3128")
         self.assertEqual(profile.read_text(), updated)
         self.assertEqual(profile.stat().st_ino, inode)
-        self.startup_profile(f, "--proxy", "http://new-proxy.lan:3128")
-        self.assertNotIn("deb-proxy", profile.read_text())
+        self.startup_profile(f, "--proxy", "http://proxy.example.net:3128")
+        self.assertNotIn("proxy.example.com", profile.read_text())
         self.assertEqual(backup.read_text(), original)
 
     def test_bash_setup_preserves_unrelated_urls_comments_and_commands(self):
@@ -735,7 +735,7 @@ class SysinfoTests(unittest.TestCase):
             with self.subTest(downloader=downloader):
                 f = self.fixture()
                 # Quotes and substitutions must remain literal configuration data.
-                proxy = "http://proxy.lan:3128/'$(printf INJECTED >&2)"
+                proxy = "http://proxy.example.com:3128/'$(printf INJECTED >&2)"
                 if downloader == "wget":
                     (f.bin / "curl").unlink()
                 f.command(downloader, f.common.read_text(), help_output="-T SEC", log_proxy=downloader == "wget")
@@ -767,11 +767,11 @@ class SysinfoTests(unittest.TestCase):
                                             capture_output=True, text=True, timeout=10)
                     self.assertEqual(result.returncode, 0, result.stderr)
                     profile = f.home / ".bashrc"
-                    self.assertIn("--proxy http://deb-proxy.lan:3128", profile.read_text())
+                    self.assertIn("--proxy http://proxy.example.com:3128", profile.read_text())
                     self.assertNotIn("sysinfo_proxy=", profile.read_text())
                     commands = f.log.read_text()
-                    self.assertTrue("--proxy http://deb-proxy.lan:3128" in commands
-                                    or "proxy:http://deb-proxy.lan:3128|http://deb-proxy.lan:3128" in commands)
+                    self.assertTrue("--proxy http://proxy.example.com:3128" in commands
+                                    or "proxy:http://proxy.example.com:3128|http://proxy.example.com:3128" in commands)
                     self.assertFalse(f.target.exists())
 
     def test_bash_setup_switches_between_remote_and_local_without_duplicates(self):
@@ -831,7 +831,7 @@ class SysinfoTests(unittest.TestCase):
         f = self.fixture()
         (f.bin / "curl").unlink()
         f.command("wget", help_output="--tries=NUMBER")
-        result = f.run("--setup-bash", "--proxy", "https://proxy.lan:3128")
+        result = f.run("--setup-bash", "--proxy", "https://proxy.example.com:3128")
         self.assertEqual(result.returncode, 1)
         self.assertIn("requires curl", result.stderr)
         self.assertFalse(f.home.exists())
@@ -868,10 +868,10 @@ alias keep=true
 
     def test_bash_setup_rejects_conflicting_or_incomplete_proxy_options(self):
         f = self.fixture()
-        for args in (("--proxy",), ("--proxy", "http://proxy"),
+        for args in (("--proxy",), ("--proxy", "http://proxy.example.com:3128"),
                      ("--setup-bash", "--proxy"),
-                     ("--setup-bash", "--proxy", "socks5://proxy"),
-                     ("--setup-bash", "--local", "--proxy", "http://proxy"),
+                     ("--setup-bash", "--proxy", "socks5://proxy.example.com:1080"),
+                     ("--setup-bash", "--local", "--proxy", "http://proxy.example.com:3128"),
                      ("--setup-bash", "--install")):
             self.assertEqual(f.run(*args).returncode, 2, args)
             self.assertFalse(f.home.exists())

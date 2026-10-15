@@ -86,9 +86,10 @@ wget -qO- https://raw.githubusercontent.com/nordz0r/sysinfo/master/sysinfo.sh | 
 #### Через прокси
 
 Укажите прокси и для первой загрузки, и для будущего автозапуска:
+замените `proxy.example.com:3128` на адрес своего прокси.
 
 ```bash
-sysinfo_proxy='http://deb-proxy.lan:3128'
+sysinfo_proxy='http://proxy.example.com:3128'
 curl -fsSL --proxy "$sysinfo_proxy" https://raw.githubusercontent.com/nordz0r/sysinfo/master/sysinfo.sh | bash -s -- --setup-bash --proxy "$sysinfo_proxy"
 ```
 
@@ -100,7 +101,7 @@ curl -fsSL --proxy "$sysinfo_proxy" https://raw.githubusercontent.com/nordz0r/sy
 Для первой загрузки через `wget` задайте `https_proxy` и `http_proxy`:
 
 ```bash
-sysinfo_proxy='http://deb-proxy.lan:3128'
+sysinfo_proxy='http://proxy.example.com:3128'
 https_proxy="$sysinfo_proxy" http_proxy="$sysinfo_proxy" wget -qO- https://raw.githubusercontent.com/nordz0r/sysinfo/master/sysinfo.sh | bash -s -- --setup-bash --proxy "$sysinfo_proxy"
 ```
 
