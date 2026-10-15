@@ -103,6 +103,33 @@ if [ "$action" = --setup-bash ]; then
             exit 1
         fi
     done
+    if [ "$setup_local" -eq 1 ]; then
+        setup_local_target=$(bash -c 'printf "%q" "$1"' sysinfo "$install_home/.local/bin/sysinfo.sh") || exit 1
+    else
+        # Resolve the downloader, its options and configuration once at setup.
+        if command -v curl >/dev/null 2>&1; then
+            set -- curl -fsSL --connect-timeout 2 --max-time 5
+            if [ -n "$setup_proxy" ]; then set -- "$@" --proxy "$setup_proxy"; fi
+        elif command -v wget >/dev/null 2>&1; then
+            case "$setup_proxy" in
+                https://*) printf '%s\n' 'An https:// proxy requires curl; install curl or use an http:// proxy.' >&2; exit 1 ;;
+            esac
+            set -- wget -qO- -T5
+            setup_wget_help=$(wget --help 2>&1) || :
+            case "$setup_wget_help" in *--tries*) set -- "$@" -t1 ;; esac
+        else
+            printf '%s\n' 'sysinfo: install curl or wget, then run --setup-bash again.' >&2
+            exit 1
+        fi
+        set -- "$@" https://raw.githubusercontent.com/nordz0r/sysinfo/master/sysinfo.sh
+        # Quote configuration as Bash data, including shell metacharacters.
+        setup_fetch=$(bash -c 'printf "%q " "$@"' sysinfo "$@") || exit 1
+        setup_fetch=${setup_fetch% }
+        if [ "$1" = wget ] && [ -n "$setup_proxy" ]; then
+            setup_proxy_assignment=$(bash -c 'printf "https_proxy=%q http_proxy=%q " "$1" "$1"' sysinfo "$setup_proxy") || exit 1
+            setup_fetch=$setup_proxy_assignment$setup_fetch
+        fi
+    fi
     setup_profile=$install_home/.bashrc
     setup_backup=$setup_profile.sysinfo.bak
     if [ -L "$setup_profile" ] || { [ -e "$setup_profile" ] && [ ! -f "$setup_profile" ]; }; then
@@ -141,7 +168,8 @@ SYSINFO_LEGACY_BASHRC
     # Match this repository and the documented local hooks, never just "sysinfo".
     # Unrecognised compound commands abort the update rather than losing content.
     if ! SYSINFO_LEGACY_HOOK="$setup_legacy_hook" awk '
-        function flush() { if (pending != "") print pending; pending = "" }
+        function emit(s) { print s; last_blank = s ~ /^[[:space:]]*$/ }
+        function flush() { if (pending != "") emit(pending); pending = "" }
         function normal(s) {
             gsub(/[[:space:]]+/, " ", s)
             sub(/^ /, "", s); sub(/ $/, "", s)
@@ -168,7 +196,7 @@ SYSINFO_LEGACY_BASHRC
             }
             if (managed) next
             if (line == "# by NorD") { flush(); pending = $0; next }
-            if (line ~ /^#/ || line == "") { flush(); print; next }
+            if (line ~ /^#/ || line == "") { flush(); emit($0); next }
             owned = line ~ remote || line ~ localpath
             legacy = 0
             if (line ~ remote) {
@@ -185,51 +213,29 @@ SYSINFO_LEGACY_BASHRC
             }
             if (legacy) { pending = ""; next }
             if (owned) { bad = NR; exit 2 }
-            flush(); print
+            flush(); emit($0)
         }
         END {
             flush()
             if (managed || bad) exit 2
+            # Keep an existing separator; add one when absent, even in a new file.
+            if (!last_blank) print ""
         }
     ' "$setup_input" > "$setup_tmp"; then
         printf '%s\n' 'Could not safely migrate existing sysinfo entries; .bashrc was left unchanged.' >&2
         exit 1
     fi
-    # Quote as Bash data, including spaces, quotes and shell metacharacters.
-    setup_quoted_proxy=$(bash -c 'printf "%q" "$1"' sysinfo "$setup_proxy") || exit 1
     if ! {
         printf '%s\n' '# >>> sysinfo >>>' \
             '# Sysinfo: lightweight system summary at interactive Bash startup.' \
             '# https://github.com/nordz0r/sysinfo'
         if [ "$setup_local" -eq 1 ]; then
-            cat <<'SYSINFO_LOCAL_BASHRC'
-case $- in
-  *i*) [ ! -x "$HOME/.local/bin/sysinfo.sh" ] || "$HOME/.local/bin/sysinfo.sh" --interactive-only ;;
-esac
-SYSINFO_LOCAL_BASHRC
+            # shellcheck disable=SC2016
+            printf '{ [[ $- == *i* && -t 0 && -t 1 && -x %s ]] && %s --interactive-only; } || :\n' "$setup_local_target" "$setup_local_target"
         else
-            printf 'case $- in\n  *i*) if [ -t 0 ] && [ -t 1 ]; then (\n    sysinfo_proxy=%s\n' "$setup_quoted_proxy"
-            cat <<'SYSINFO_REMOTE_BASHRC'
-    sysinfo_url=https://raw.githubusercontent.com/nordz0r/sysinfo/master/sysinfo.sh
-    if command -v curl >/dev/null 2>&1; then
-      set -- -fsSL --connect-timeout 2 --max-time 5
-      if [ -n "$sysinfo_proxy" ]; then set -- "$@" --proxy "$sysinfo_proxy"; fi
-      sysinfo_code=$(curl "$@" "$sysinfo_url") || exit
-    elif command -v wget >/dev/null 2>&1; then
-      set -- -qO- -T5
-      if wget --help 2>&1 | grep -q -- --tries; then set -- "$@" -t1; fi
-      if [ -n "$sysinfo_proxy" ]; then
-        sysinfo_code=$(https_proxy="$sysinfo_proxy" http_proxy="$sysinfo_proxy" wget "$@" "$sysinfo_url") || exit
-      else
-        sysinfo_code=$(wget "$@" "$sysinfo_url") || exit
-      fi
-    else
-      printf '%s\n' 'sysinfo: install curl or wget for GitHub startup.' >&2; exit 1
-    fi
-    [ -n "$sysinfo_code" ] && "$BASH" -c "$sysinfo_code" sysinfo.sh --interactive-only
-  ) || :; fi ;;
-esac
-SYSINFO_REMOTE_BASHRC
+            # Keep stdin attached to the terminal and discard failed downloads.
+            # shellcheck disable=SC2016
+            printf '{ [[ $- == *i* && -t 0 && -t 1 ]] && (sysinfo_code=$(%s) && [ -n "$sysinfo_code" ] && "$BASH" -c "$sysinfo_code" sysinfo.sh --interactive-only); } || :\n' "$setup_fetch"
         fi
         printf '%s\n' '# <<< sysinfo <<<'
     } >> "$setup_tmp"; then

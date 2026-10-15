@@ -64,8 +64,14 @@ wget -qO- https://raw.githubusercontent.com/nordz0r/sysinfo/master/sysinfo.sh | 
 ```
 
 Each interactive Bash startup fetches the current `sysinfo.sh` from GitHub
-and runs it from memory. It prefers `curl`, falls back to `wget` when curl is
-absent, and suggests installing a downloader if neither exists.
+and runs it from memory. Setup selects `curl`, or `wget` if curl is absent.
+If neither exists, setup suggests installing a downloader and leaves the
+profile unchanged.
+
+The `.bashrc` entry contains a blank separator, comments, and one startup line
+with the URL and proxy options already filled in. Downloader detection and
+option selection happen during setup. If you remove the selected downloader,
+run `--setup-bash` again to select an available one.
 
 Fetching starts only in interactive Bash with terminal stdin and stdout.
 The fetched script checks these descriptors again through `--interactive-only`.
@@ -83,8 +89,8 @@ sysinfo_proxy='http://deb-proxy.lan:3128'
 curl -fsSL --proxy "$sysinfo_proxy" https://raw.githubusercontent.com/nordz0r/sysinfo/master/sysinfo.sh | bash -s -- --setup-bash --proxy "$sysinfo_proxy"
 ```
 
-The `--proxy` address is saved in the startup block and used by both `curl`
-and `wget`. Pass it again when reconfiguring; without it, the hook uses normal
+The `--proxy` address is inserted into the selected downloader command.
+Pass it again when reconfiguring; without it, the hook uses normal
 proxy settings from the environment. Use an `http://` proxy for compatibility
 with both downloaders; an `https://` proxy requires `curl`.
 For the initial download with `wget`, set `https_proxy` and `http_proxy`:

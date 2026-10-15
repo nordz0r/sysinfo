@@ -121,10 +121,10 @@ Pages speculative: 1.
         if executable.is_symlink():
             executable.unlink()
         script = "#!/bin/sh\n" + f'printf "%s\\n" "{name}:$*" >> "$SYSINFO_COMMAND_LOG"\n'
-        if log_proxy:
-            script += 'printf "proxy:%s|%s\\n" "${https_proxy-}" "${http_proxy-}" >> "$SYSINFO_COMMAND_LOG"\n'
         if help_output is not None:
             script += f'if [ "$1" = --help ]; then printf "%s\\n" {shlex.quote(help_output)}; exit 0; fi\n'
+        if log_proxy:
+            script += 'printf "proxy:%s|%s\\n" "${https_proxy-}" "${http_proxy-}" >> "$SYSINFO_COMMAND_LOG"\n'
         executable.write_text(script + f"printf '%s' {shlex.quote(output)}\nexit {status}\n")
         executable.chmod(0o755)
 
@@ -545,7 +545,7 @@ class SysinfoTests(unittest.TestCase):
         for _ in range(2):
             self.startup_profile(f)
         self.assertEqual(profile.read_text().count("https://raw.githubusercontent.com/nordz0r/sysinfo/master/sysinfo.sh"), 1)
-        self.assertTrue(profile.read_text().startswith("# existing user configuration\n"))
+        self.assertTrue(profile.read_text().startswith("# existing user configuration\n\n# >>> sysinfo >>>\n"))
         self.assertFalse(f.log.exists())
         p = subprocess.run(["/bin/bash", str(profile)], env=f.env,
                            capture_output=True, text=True, timeout=10)
@@ -576,11 +576,14 @@ class SysinfoTests(unittest.TestCase):
             (f.bin / "curl").unlink()
             f.command("wget", f.common.read_text(), help_output=help_text)
             profile = self.startup_profile(f)
+            self.assertEqual(f.log.read_text().splitlines(), ["wget:--help"])
+            f.log.unlink()
             self.table(f.terminal(["/bin/bash", "--noprofile", "--norc", "-i", "-c",
                                    'source "$1"', "sysinfo-startup", str(profile)]))
             fetch = next(line for line in f.log.read_text().splitlines() if line.startswith("wget:-qO-"))
             self.assertIn("-T5", fetch)
             self.assertEqual("-t1" in fetch, tries)
+            self.assertNotIn("--help", f.log.read_text())
             self.assertFalse(f.target.exists())
 
     def test_github_startup_skips_failed_partial_and_empty_downloads(self):
@@ -595,15 +598,18 @@ class SysinfoTests(unittest.TestCase):
             self.assertEqual(len(f.log.read_text().splitlines()), 1)
             self.assertFalse(f.target.exists())
 
-    def test_github_startup_suggests_a_missing_downloader(self):
+    def test_bash_setup_suggests_a_missing_downloader_without_changing_profile(self):
         f = self.fixture()
         (f.bin / "curl").unlink()
-        profile = self.startup_profile(f)
-        result = f.terminal(["/bin/bash", "--noprofile", "--norc", "-i", "-c",
-                             'source "$1"', "sysinfo-startup", str(profile)])
-        self.assertEqual(result.returncode, 0, result.stderr)
+        f.home.mkdir()
+        profile = f.home / ".bashrc"
+        profile.write_text("# existing configuration\n")
+        result = f.run("--setup-bash")
+        self.assertEqual(result.returncode, 1, result.stderr)
         self.assertEqual(result.stdout, "")
         self.assertIn("install curl or wget", result.stderr)
+        self.assertEqual(profile.read_text(), "# existing configuration\n")
+        self.assertFalse((f.home / ".bashrc.sysinfo.bak").exists())
         self.assertFalse(f.log.exists())
 
     def test_github_startup_skips_fetch_when_terminal_is_missing(self):
@@ -629,7 +635,6 @@ class SysinfoTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
             profile = f.home / ".bashrc"
             self.assertEqual(profile.read_text().count("# >>> sysinfo >>>"), 1)
-            profile.write_text(profile.read_text().replace("$HOME/.local/bin/sysinfo.sh", str(f.target)))
             self.table(f.terminal(["/bin/bash", "--noprofile", "--norc", "-i", "-c",
                                    'source "$1"', "sysinfo-startup", str(profile)]))
             self.assertNotIn("curl:", f.log.read_text())
@@ -734,7 +739,11 @@ class SysinfoTests(unittest.TestCase):
                     (f.bin / "curl").unlink()
                 f.command(downloader, f.common.read_text(), help_output="-T SEC", log_proxy=downloader == "wget")
                 profile = self.startup_profile(f, "--proxy", proxy)
-                self.assertFalse(f.log.exists())
+                if downloader == "wget":
+                    self.assertEqual(f.log.read_text().splitlines(), ["wget:--help"])
+                    f.log.unlink()
+                else:
+                    self.assertFalse(f.log.exists())
                 result = f.terminal(["/bin/bash", "--noprofile", "--norc", "-i", "-c",
                                      'source "$1"', "sysinfo-startup", str(profile)])
                 self.table(result)
@@ -757,7 +766,8 @@ class SysinfoTests(unittest.TestCase):
                                             capture_output=True, text=True, timeout=10)
                     self.assertEqual(result.returncode, 0, result.stderr)
                     profile = f.home / ".bashrc"
-                    self.assertIn("sysinfo_proxy=http://deb-proxy.lan:3128", profile.read_text())
+                    self.assertIn("--proxy http://deb-proxy.lan:3128", profile.read_text())
+                    self.assertNotIn("sysinfo_proxy=", profile.read_text())
                     commands = f.log.read_text()
                     self.assertTrue("--proxy http://deb-proxy.lan:3128" in commands
                                     or "proxy:http://deb-proxy.lan:3128|http://deb-proxy.lan:3128" in commands)
@@ -772,6 +782,87 @@ class SysinfoTests(unittest.TestCase):
         self.startup_profile(f)
         self.assertNotIn(".local/bin/sysinfo.sh", profile.read_text())
         self.assertEqual(profile.read_text().count("# >>> sysinfo >>>"), 1)
+
+    def test_bash_setup_writes_one_command_with_resolved_downloader(self):
+        for downloader in ("curl", "wget"):
+            with self.subTest(downloader=downloader):
+                f = self.fixture()
+                f.home.mkdir()
+                if downloader == "wget":
+                    (f.bin / "curl").unlink()
+                f.command("wget", f.common.read_text(), help_output="--tries=NUMBER")
+                f.command(downloader, f.common.read_text(), help_output="--tries=NUMBER")
+                profile = self.startup_profile(f)
+                content = profile.read_text()
+                self.assertTrue(content.startswith("\n# >>> sysinfo >>>\n"))
+                commands = [line for line in content.splitlines() if line and not line.startswith("#")]
+                self.assertEqual(len(commands), 1)
+                self.assertIn(f"sysinfo_code=$({downloader} ", commands[0])
+                for fragment in ("if ", "then", "else", "command -v", "sysinfo_url", "sysinfo_proxy"):
+                    self.assertNotIn(fragment, commands[0])
+                if f.log.exists():
+                    f.log.unlink()
+                # Installing the other downloader later does not change the hook.
+                other = "curl" if downloader == "wget" else "wget"
+                f.command(other, "printf SHOULD_NOT_RUN", status=1)
+                self.table(f.terminal(["/bin/bash", "--noprofile", "--norc", "-i", "-c",
+                                       'source "$1"', "sysinfo-startup", str(profile)]))
+                self.assertNotIn(other + ":", f.log.read_text())
+                self.assertNotIn("--help", f.log.read_text())
+
+    def test_bash_setup_keeps_blank_separator_without_accumulating_empty_lines(self):
+        for original in ("", "# existing", "# existing\n", "# existing\n\n"):
+            with self.subTest(original=original):
+                f = self.fixture()
+                f.home.mkdir()
+                profile = f.home / ".bashrc"
+                profile.write_text(original)
+                self.startup_profile(f)
+                content = profile.read_text()
+                self.assertIn("\n\n# >>> sysinfo >>>" if original else "\n# >>> sysinfo >>>", content)
+                self.assertNotIn("\n\n\n# >>> sysinfo >>>", content)
+                for _ in range(2):
+                    self.startup_profile(f)
+                self.assertEqual(profile.read_text(), content)
+
+    def test_bash_setup_rejects_https_proxy_with_wget_only(self):
+        f = self.fixture()
+        (f.bin / "curl").unlink()
+        f.command("wget", help_output="--tries=NUMBER")
+        result = f.run("--setup-bash", "--proxy", "https://proxy.lan:3128")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("requires curl", result.stderr)
+        self.assertFalse(f.home.exists())
+
+    def test_bash_setup_replaces_previous_expanded_managed_block(self):
+        f = self.fixture()
+        f.home.mkdir()
+        profile = f.home / ".bashrc"
+        original = '''# existing settings
+# >>> sysinfo >>>
+# https://github.com/nordz0r/sysinfo
+case $- in
+  *i*) if [ -t 0 ] && [ -t 1 ]; then (
+    sysinfo_url=https://raw.githubusercontent.com/nordz0r/sysinfo/master/sysinfo.sh
+    if command -v curl >/dev/null 2>&1; then
+      sysinfo_code=$(curl -fsSL "$sysinfo_url") || exit
+    else
+      sysinfo_code=$(wget -qO- "$sysinfo_url") || exit
+    fi
+    "$BASH" -c "$sysinfo_code" sysinfo.sh --interactive-only
+  ) || :; fi ;;
+esac
+# <<< sysinfo <<<
+alias keep=true
+'''
+        profile.write_text(original)
+        self.startup_profile(f)
+        updated = profile.read_text()
+        self.assertTrue(updated.startswith("# existing settings\nalias keep=true\n\n# >>> sysinfo >>>\n"))
+        self.assertNotIn("if command -v", updated)
+        self.assertNotIn("sysinfo_url=", updated)
+        self.assertEqual(updated.count("# >>> sysinfo >>>"), 1)
+        self.assertEqual((f.home / ".bashrc.sysinfo.bak").read_text(), original)
 
     def test_bash_setup_rejects_conflicting_or_incomplete_proxy_options(self):
         f = self.fixture()
