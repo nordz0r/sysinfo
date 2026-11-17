@@ -168,7 +168,7 @@ class SysinfoTests(unittest.TestCase):
     def startup_profile(self, fixture, *args):
         fixture.home.mkdir(exist_ok=True)
         profile = fixture.home / (".bashrc" if fixture.env.get("SHELL", "").endswith("bash") else ".profile")
-        result = fixture.run("setup", *args)
+        result = fixture.run("--install", *args)
         self.assertEqual(result.returncode, 0, result.stderr)
         return profile
 
@@ -423,13 +423,13 @@ class SysinfoTests(unittest.TestCase):
         expected = f.common.read_bytes()
         self.assertFalse(f.home.exists())
         for _ in range(2):
-            p = f.run("--install")
+            p = f.run("--install", "--local")
             self.assertEqual(p.returncode, 0, p.stderr)
             self.assertIn("Installed:", p.stdout)
             self.assertNotIn("SYSTEM", p.stdout)
             self.assertEqual(f.target.read_bytes(), expected)
             self.assertEqual(f.target.stat().st_mode & 0o777, 0o755)
-            self.assertFalse((f.home / ".bashrc").exists())
+            self.assertTrue((f.home / ".bashrc").is_file())
         f.common.unlink()
         p = subprocess.run([str(f.target)], env=f.env,
                            capture_output=True, text=True, timeout=10)
@@ -437,17 +437,89 @@ class SysinfoTests(unittest.TestCase):
         self.assertNotIn("curl:", f.log.read_text())
         self.assertNotIn("wget:", f.log.read_text())
 
-    def test_piped_install_and_uninstall_leave_shell_profile_untouched(self):
+    def test_action_messages_select_russian_locale_and_fallback_to_english(self):
+        f = self.fixture()
+        cases = (
+            ({"LC_ALL": "ru_RU.UTF-8"}, True),
+            ({"LC_MESSAGES": "ru_RU.UTF-8", "LC_ALL": ""}, True),
+            ({"LANG": "ru_RU.UTF-8", "LC_ALL": "", "LC_MESSAGES": ""}, True),
+            ({"LC_ALL": "C", "LC_MESSAGES": "ru_RU.UTF-8", "LANG": "ru_RU"}, False),
+            ({"LC_ALL": "", "LC_MESSAGES": "en_US.UTF-8", "LANG": "ru_RU"}, False),
+            ({"LC_ALL": "", "LC_MESSAGES": "", "LANG": "fr_FR.UTF-8"}, False),
+        )
+        for locale, russian in cases:
+            with self.subTest(locale=locale):
+                f.env.update(locale)
+                result = f.run("--uninstall")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn(str(f.target), result.stdout)
+                self.assertEqual(any("Установ" in line or "Не установлен" in line
+                                     for line in result.stdout.splitlines()), russian)
+        install = f.run("--install", "--local")
+        self.assertEqual(install.returncode, 0, install.stderr)
+        f.env["LC_ALL"] = "ru_RU.UTF-8"
+        installed_action = subprocess.run([str(f.target), "--uninstall"], env=f.env,
+                                          capture_output=True, text=True, timeout=10)
+        self.assertEqual(installed_action.returncode, 0, installed_action.stderr)
+        self.assertIn("Удалён:", installed_action.stdout)
+        self.assertFalse(f.target.exists())
+
+
+    def test_install_output_explains_executable_target_and_manual_launch(self):
+        f = self.fixture()
+        f.env["LC_ALL"] = "ru_RU@modifier"
+        result = f.run("--install", "--local")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(str(f.target), result.stdout)
+        self.assertIn("Сохраняю текущий скрипт", result.stdout)
+        self.assertIn("755", result.stdout)
+        self.assertIn("/bin/sh", result.stdout)
+        self.assertNotIn("curl:", f.log.read_text() if f.log.exists() else "")
+        self.assertEqual(f.target.stat().st_mode & 0o777, 0o755)
+
+    def test_setup_describes_remote_stream_and_local_executable_without_claiming_fetch(self):
+        f = self.fixture()
+        f.home.mkdir()
+        profile = f.home / ".bashrc"
+        profile.write_text("# existing user configuration\n")
+        f.env["LC_ALL"] = "ru_RU.UTF-8"
+        remote = f.run("--install", "--proxy", "http://user:secret@proxy.example:3128")
+        self.assertEqual(remote.returncode, 0, remote.stderr)
+        self.assertIn("curl", remote.stdout)
+        self.assertIn("sh", remote.stdout)
+        self.assertIn("https://raw.githubusercontent.com/nordz0r/sysinfo/master/sysinfo.sh", remote.stdout)
+        self.assertIn(str(profile), remote.stdout)
+        self.assertNotIn("user:secret", remote.stdout)
+        self.assertIn("скачает", remote.stdout.lower())
+        self.assertNotIn("curl:", f.log.read_text() if f.log.exists() else "")
+
+        repeat = f.run("--install", "--proxy", "http://user:secret@proxy.example:3128")
+        self.assertEqual(repeat.returncode, 0, repeat.stderr)
+        self.assertIn(str(profile), repeat.stdout)
+        self.assertIn("уже выполнена", repeat.stdout)
+        self.assertNotIn("user:secret", repeat.stdout)
+        self.assertTrue((f.home / ".bashrc.sysinfo.bak").is_file())
+        local = f.run("--install", "--local")
+        self.assertEqual(local.returncode, 0, local.stderr)
+        self.assertTrue(f.target.is_file())
+        self.assertIn(str(f.target), local.stdout)
+        self.assertIn(str(profile), local.stdout)
+        self.assertNotIn("https://raw.githubusercontent.com", local.stdout)
+        self.assertIn("напрямую", local.stdout.lower())
+        self.assertIn("/bin/sh", local.stdout)
+        self.assertNotIn("user:secret", local.stdout)
+
+    def test_piped_install_and_uninstall_manage_shell_profile_and_local_copy(self):
         for system in ("Linux", "Darwin"):
             f = self.fixture(system)
             f.home.mkdir()
             profile = f.home / ".bashrc"
             profile.write_text("# existing user configuration\n")
             for _ in range(2):
-                p = f.run("--install", piped=True)
+                p = f.run("--install", "--local", piped=True)
                 self.assertEqual(p.returncode, 0, p.stderr)
                 self.assertEqual(f.target.read_bytes(), f.common.read_bytes())
-                self.assertEqual(profile.read_text(), "# existing user configuration\n")
+                self.assertIn("# >>> sysinfo >>>", profile.read_text())
                 p = subprocess.run([str(f.target)], env=f.env,
                                    capture_output=True, text=True, timeout=10)
                 self.table(p)
@@ -458,6 +530,15 @@ class SysinfoTests(unittest.TestCase):
                 self.assertEqual(profile.read_text(), "# existing user configuration\n")
             self.assertNotIn("curl:", f.log.read_text())
 
+    def test_remote_install_configures_fresh_download_without_saving_local_copy(self):
+        f = self.fixture()
+        result = f.run("--install", piped=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue((f.home / ".bashrc").is_file())
+        self.assertIn("raw.githubusercontent.com", (f.home / ".bashrc").read_text())
+        self.assertFalse(f.target.exists())
+        self.assertNotIn("curl:", f.log.read_text() if f.log.exists() else "")
+
     def test_uninstall_before_install_creates_nothing(self):
         f = self.fixture()
         p = f.run("--uninstall", piped=True)
@@ -467,7 +548,7 @@ class SysinfoTests(unittest.TestCase):
 
     def test_bash_piped_install_and_installed_uninstall(self):
         f = self.fixture()
-        p = subprocess.run(["/bin/bash", "-s", "--", "--install"],
+        p = subprocess.run(["/bin/bash", "-s", "--", "--install", "--local"],
                            input=f.common.read_text(), env=f.env, capture_output=True,
                            text=True, timeout=10)
         self.assertEqual(p.returncode, 0, p.stderr)
@@ -483,7 +564,7 @@ class SysinfoTests(unittest.TestCase):
             source = f.common.read_text().replace(
                 f"install_home={shlex.quote(str(f.home))}", f"install_home={shlex.quote(home)}")
             f.common.write_text(source)
-            p = f.run("--install")
+            p = f.run("--install", "--local")
             self.assertEqual(p.returncode, 1)
             self.assertIn("HOME must be set to an absolute directory", p.stderr)
             self.assertFalse(f.home.exists())
@@ -500,8 +581,8 @@ class SysinfoTests(unittest.TestCase):
                 f.target.mkdir()
             else:
                 f.target.symlink_to(unrelated)
-            for option in ("--install", "--uninstall"):
-                p = f.run(option)
+            for args in (("--install", "--local"), ("--uninstall",)):
+                p = f.run(*args)
                 self.assertEqual(p.returncode, 1)
                 self.assertIn("Refusing", p.stderr)
             self.assertEqual(unrelated.read_text(), "preserve me")
@@ -514,11 +595,11 @@ class SysinfoTests(unittest.TestCase):
 
     def test_failed_update_preserves_installed_copy_and_removes_temp_file(self):
         f = self.fixture()
-        self.assertEqual(f.run("--install").returncode, 0)
+        self.assertEqual(f.run("--install", "--local").returncode, 0)
         previous = f.target.read_bytes()
         f.common.write_text(f.common.read_text().replace("# POSIX syntax", "# Updated payload\n# POSIX syntax"))
         f.command("chmod", status=1)
-        p = f.run("--install")
+        p = f.run("--install", "--local")
         self.assertEqual(p.returncode, 1)
         self.assertEqual(f.target.read_bytes(), previous)
         self.assertFalse(list(f.target.parent.glob(".sysinfo.*")))
@@ -527,7 +608,7 @@ class SysinfoTests(unittest.TestCase):
         f = self.fixture()
         f.home.mkdir()
         (f.home / ".local").write_text("user file")
-        self.assertEqual(f.run("--install").returncode, 1)
+        self.assertEqual(f.run("--install", "--local").returncode, 1)
         self.assertEqual((f.home / ".local").read_text(), "user file")
         self.assertEqual(f.run("--install", "--uninstall").returncode, 2)
 
@@ -601,7 +682,7 @@ class SysinfoTests(unittest.TestCase):
         f.home.mkdir()
         profile = f.home / ".bashrc"
         profile.write_text("# existing configuration\n")
-        result = f.run("setup")
+        result = f.run("--install")
         self.assertEqual(result.returncode, 1, result.stderr)
         self.assertEqual(result.stdout, "")
         self.assertIn("install curl or wget", result.stderr)
@@ -621,7 +702,7 @@ class SysinfoTests(unittest.TestCase):
 
     def test_local_startup_uses_installed_copy(self):
         f = self.fixture()
-        self.assertEqual(f.run("--install").returncode, 0)
+        self.assertEqual(f.run("--install", "--local").returncode, 0)
         profile = self.startup_profile(f, "--local")
         self.table(f.terminal(["/bin/bash", "--noprofile", "--norc", "-i", "-c",
                                'source "$1"', "sysinfo-startup", str(profile)]))
@@ -691,7 +772,7 @@ class SysinfoTests(unittest.TestCase):
                 f.home.mkdir()
                 profile = f.home / ".bashrc"
                 profile.write_text(original)
-                self.assertEqual(f.run("setup").returncode, 1)
+                self.assertEqual(f.run("--install").returncode, 1)
                 self.assertEqual(profile.read_text(), original)
                 self.assertFalse((f.home / ".bashrc.sysinfo.bak").exists())
                 self.assertFalse(list(f.home.glob(".sysinfo-profile.*")))
@@ -710,7 +791,7 @@ class SysinfoTests(unittest.TestCase):
             else:
                 profile.write_text("# keep\n")
                 f.command("mv", status=1)
-            self.assertEqual(f.run("setup").returncode, 1)
+            self.assertEqual(f.run("--install").returncode, 1)
             self.assertEqual(unrelated.read_text(), "# keep\n")
             if kind == "failed-move":
                 self.assertEqual(profile.read_text(), "# keep\n")
@@ -790,7 +871,7 @@ class SysinfoTests(unittest.TestCase):
         f = self.fixture()
         (f.bin / "curl").unlink()
         f.command("wget", help_output="--tries=NUMBER")
-        result = f.run("setup", "--proxy", "https://proxy.example.com:3128")
+        result = f.run("--install", "--proxy", "https://proxy.example.com:3128")
         self.assertEqual(result.returncode, 1)
         self.assertIn("requires curl", result.stderr)
         self.assertFalse(f.home.exists())
@@ -828,10 +909,10 @@ alias keep=true
     def test_shell_setup_rejects_conflicting_or_incomplete_proxy_options(self):
         f = self.fixture()
         for args in (("--proxy",), ("--proxy", "http://proxy.example.com:3128"),
-                     ("setup", "--proxy"),
-                     ("setup", "--proxy", "socks5://proxy.example.com:1080"),
-                     ("setup", "--local", "--proxy", "http://proxy.example.com:3128"),
-                     ("setup", "--install")):
+                     ("--install", "--proxy"),
+                     ("--install", "--proxy", "socks5://proxy.example.com:1080"),
+                     ("--install", "--local", "--proxy", "http://proxy.example.com:3128"),
+                     ("--install", "--uninstall")):
             self.assertEqual(f.run(*args).returncode, 2, args)
             self.assertFalse(f.home.exists())
 
@@ -877,7 +958,7 @@ alias keep=true
 
     def test_interactive_guard_does_not_prevent_explicit_install(self):
         f = self.fixture()
-        result = f.run("--install", "--interactive-only", piped=True)
+        result = f.run("--install", "--local", "--interactive-only", piped=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(f.target.is_file())
 

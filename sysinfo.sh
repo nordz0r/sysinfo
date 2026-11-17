@@ -1,24 +1,96 @@
 #!/bin/sh
 # sysinfo-managed-install: 1
-# Run immediately; save a copy only with --install.
+# --install configures a fresh remote startup download; add --local to save a managed copy too.
 sysinfo_payload=$(cat <<'SYSINFO_PAYLOAD'
 #!/bin/sh
 # Sysinfo: one lightweight entry point for Linux, BusyBox/OpenWrt and macOS.
 # Copyright (C) 2019 NorD. MIT license.
 
 # Default: load the current GitHub script at each interactive shell startup.
-# Run once to configure the appropriate shell startup file (with backup).
-# BEGIN SHELL STARTUP
-# curl -fsSL -o sysinfo.sh https://raw.githubusercontent.com/nordz0r/sysinfo/master/sysinfo.sh && sh sysinfo.sh setup
-# END SHELL STARTUP
-# With a proxy (used now and saved for subsequent startup downloads):
-# sysinfo_proxy='http://proxy.example.com:3128'
-# curl -fsSL --proxy "$sysinfo_proxy" -o sysinfo.sh https://raw.githubusercontent.com/nordz0r/sysinfo/master/sysinfo.sh && sh sysinfo.sh setup --proxy "$sysinfo_proxy"
-# Without curl: wget -qO sysinfo.sh <same URL> && sh sysinfo.sh setup
-# Offline option B: --install saves a local executable; see README for its hook.
-# --install/--uninstall never edit startup files; all collection/rendering stays here.
+# Startup uses the current GitHub script; --install configures it with a backup.
+# Add --local to --install to save a managed executable and use that copy.
+# Interactive startup fetches the current GitHub script directly into sh; no local copy is made.
+# Run `sh sysinfo.sh --install` to configure this remote startup hook (with backup).
+# Add `--local` to save an executable under ~/.local/bin and configure that hook in one pass.
+# --uninstall removes the managed startup hook and local copy when present.
+
+# With a proxy, pass its URL explicitly to --install (it is not printed in action logs).
 
 # POSIX syntax also works with the system Bash 3.2 on macOS.
+# Capture the message locale before forcing C for parsing. Action messages use
+# LC_ALL, then LC_MESSAGES, then LANG; reporting remains locale-independent.
+sysinfo_message_locale=${LC_ALL:-${LC_MESSAGES:-${LANG:-}}}
+case "$sysinfo_message_locale" in ru_RU|ru_RU.*|ru_RU@*|ru_RU.*@*) sysinfo_messages=ru ;; *) sysinfo_messages=en ;; esac
+action_msg() {
+    action_msg_key=$1
+    shift
+    if [ "$sysinfo_messages" = ru ]; then
+        case "$action_msg_key" in
+            conflict) printf '%s\n' 'Используйте только один режим: --install или --uninstall.' ;;
+            proxy_arg) printf '%s\n' '--proxy требует URL (или пустую строку для настроек окружения).' ;;
+            setup_flags) printf '%s\n' '--proxy и --local требуют --install.' ;;
+            home_setup) printf '%s\n' 'Для настройки оболочки переменная HOME должна содержать абсолютный путь.' ;;
+            proxy_local) printf '%s\n' '--proxy нельзя использовать вместе с --local.' ;;
+            bad_proxy) printf '%s\n' 'Для curl/wget укажите URL прокси http:// или https://.' ;;
+            missing_setup_tool) printf 'Не найдена обязательная команда настройки оболочки: %s\n' "$1" ;;
+            https_wget) printf '%s\n' 'Для прокси https:// требуется curl; установите curl или используйте прокси http://.' ;;
+            no_downloader) printf '%s\n' 'sysinfo: установите curl или wget, затем снова выполните sh sysinfo.sh --install.' ;;
+            unsafe_profile) printf 'Отказ изменять символическую ссылку или обычный файл другого типа: %s\n' "$1" ;;
+            migrate_failed) printf '%s\n' 'Не удалось безопасно перенести существующие записи sysinfo; файл профиля не изменён.' ;;
+            block_failed) printf '%s\n' 'Не удалось записать блок настройки оболочки.' ;;
+            syntax_failed) printf '%s\n' 'Проверка синтаксиса настройки оболочки не пройдена; файл профиля не изменён.' ;;
+            setup_same) printf 'Настройка оболочки уже выполнена: %s\n' "$1" ;;
+            backup) printf 'Резервная копия: %s\n' "$1" ;;
+            setup_done) printf 'Настроен запуск оболочки: %s\n' "$1" ;;
+            home_install) printf '%s\n' 'Для установки переменная HOME должна содержать абсолютный путь.' ;;
+            unsafe_target) printf 'Отказ изменять символическую ссылку или обычный файл другого типа: %s\n' "$1" ;;
+            unmanaged) printf 'Отказ изменять файл, не установленный sysinfo: %s\n' "$1" ;;
+            not_installed) printf 'Не установлен: %s\n' "$1" ;;
+            remove_failed) printf 'Не удалось удалить: %s\n' "$1" ;;
+            removed) printf 'Удалён: %s\n' "$1" ;;
+            missing_install_tool) printf 'Не найдена обязательная команда установки: %s\n' "$1" ;;
+            mkdir_failed) printf 'Не удалось создать каталог установки: %s\n' "$1" ;;
+            saving_current) printf 'Сохраняю текущий скрипт в: %s\n' "$1" ;;
+            write_failed) printf '%s\n' 'Не удалось записать установленный скрипт.' ;;
+            install_failed) printf 'Не удалось установить: %s\n' "$1" ;;
+            installed) printf 'Установлен исполняемый скрипт (права 755): %s\nДля ручного запуска выполните этот файл; интерпретатор по shebang: /bin/sh\n' "$1" ;;
+            setup_remote) printf 'При запуске интерактивной оболочки %s скачает скрипт по URL ниже и передаст его в sh; файл загрузки не создаётся:\n' "$1" ;;
+            setup_local) printf '%s\n' 'При запуске интерактивной оболочки локальный файл будет запущен напрямую как исполняемый; shebang запускает его через /bin/sh:' ;;
+        esac
+    else
+        case "$action_msg_key" in
+            conflict) printf '%s\n' 'Use only one of --install or --uninstall.' ;;
+            proxy_arg) printf '%s\n' '--proxy requires a URL (or an empty string to use environment settings).' ;;
+            setup_flags) printf '%s\n' '--proxy and --local require --install.' ;;
+            home_setup) printf '%s\n' 'HOME must be set to an absolute directory for shell setup.' ;;
+            proxy_local) printf '%s\n' '--proxy cannot be combined with --local.' ;;
+            bad_proxy) printf '%s\n' 'Use an http:// or https:// proxy URL for curl/wget.' ;;
+            missing_setup_tool) printf 'Required shell setup command missing: %s\n' "$1" ;;
+            https_wget) printf '%s\n' 'An https:// proxy requires curl; install curl or use an http:// proxy.' ;;
+            no_downloader) printf '%s\n' 'sysinfo: install curl or wget, then run sh sysinfo.sh --install again.' ;;
+            unsafe_profile|unsafe_target) printf 'Refusing to modify a symlink or non-regular file: %s\n' "$1" ;;
+            migrate_failed) printf '%s\n' 'Could not safely migrate existing sysinfo entries; shell profile was left unchanged.' ;;
+            block_failed) printf '%s\n' 'Could not write the shell startup block.' ;;
+            syntax_failed) printf '%s\n' 'Shell startup syntax validation failed; profile was left unchanged.' ;;
+            setup_same) printf 'Shell startup already configured: %s\n' "$1" ;;
+            backup) printf 'Backup: %s\n' "$1" ;;
+            setup_done) printf 'Configured shell startup: %s\n' "$1" ;;
+            home_install) printf '%s\n' 'HOME must be set to an absolute directory for installation.' ;;
+            unmanaged) printf 'Refusing to modify an unmanaged file: %s\n' "$1" ;;
+            not_installed) printf 'Not installed: %s\n' "$1" ;;
+            remove_failed) printf 'Could not remove: %s\n' "$1" ;;
+            removed) printf 'Uninstalled: %s\n' "$1" ;;
+            missing_install_tool) printf 'Required installation command missing: %s\n' "$1" ;;
+            mkdir_failed) printf 'Could not create installation directory: %s\n' "$1" ;;
+            saving_current) printf 'Saving current script to: %s\n' "$1" ;;
+            write_failed) printf '%s\n' 'Could not write the installed script.' ;;
+            install_failed) printf 'Could not install: %s\n' "$1" ;;
+            installed) printf 'Installed: %s (mode 755)\nRun this executable directly; its shebang selects /bin/sh.\n' "$1" ;;
+            setup_remote) printf 'When an interactive shell starts, %s downloads the script from the URL below and pipes it to sh; no download file is created:\n' "$1" ;;
+            setup_local) printf '%s\n' 'When an interactive shell starts, the local file is run directly as an executable; its shebang selects /bin/sh:' ;;
+        esac
+    fi
+}
 # Decide on Unicode bars before forcing the C locale for parsing.
 # Explicit locale wins; with no locale at all (OpenWrt) trust common UTF-8 terminals.
 utf8=0
@@ -39,14 +111,13 @@ interactive_only=0
 setup_proxy=
 setup_proxy_set=0
 setup_local=0
-if [ "${1:-}" = setup ]; then action=setup; shift; fi
 while [ "$#" -gt 0 ]; do
     arg=$1
     shift
     case "$arg" in
         --install|--uninstall)
             if [ "$action" != report ] && [ "$action" != "$arg" ]; then
-                printf '%s\n' 'Use only one of --install, --uninstall or setup.' >&2
+                action_msg conflict >&2
                 exit 2
             fi
             action=$arg ;;
@@ -56,51 +127,49 @@ while [ "$#" -gt 0 ]; do
         --local) setup_local=1 ;;
         --proxy)
             if [ "$#" -eq 0 ]; then
-                printf '%s\n' '--proxy requires a URL (or an empty string to use environment settings).' >&2
+                action_msg proxy_arg >&2
                 exit 2
             fi
             setup_proxy=$1; setup_proxy_set=1; shift ;;
         --no-color) color=never ;;
         --color) color=always ;;
         -h|--help)
-            printf '%s\n' 'Usage: sysinfo.sh [--install|--uninstall] [--details] [--all-interfaces]' \
+            printf '%s\n' 'Usage: sysinfo.sh [--install [--local] [--proxy URL]|--uninstall] [--details] [--all-interfaces]' \
                 '                  [--interactive-only] [--color|--no-color]' \
-                '       sysinfo.sh setup [--proxy URL | --local]' \
                 'Default: four local filesystems, three interfaces (all on OpenWrt).' \
                 '--details: show all local filesystems and interfaces.' \
                 '--interactive-only: print only when stdin and stdout are terminals.' \
-                '--install: save an executable copy to ~/.local/bin/sysinfo.sh.' \
-                '--uninstall: remove that copy; leave the directories in place.' \
-                'setup: migrate sysinfo startup entries in the shell profile (with backup).' \
-                '--proxy URL: save an HTTP(S) proxy for GitHub startup; HTTPS needs curl.' \
-                '--local: configure shell startup using the installed copy instead.'
+                '--install: configure remote GitHub startup download in the selected shell profile.' \
+                '--install --local: save an executable copy and configure local startup in one operation.' \
+                '--uninstall: remove managed startup hook and local copy; leave directories in place.' \
+                '--proxy URL: use an HTTP(S) proxy for startup downloads; HTTPS needs curl.'
             exit 0 ;;
         *) printf 'Unknown option: %s\n' "$arg" >&2; exit 2 ;;
     esac
 done
-if { [ "$setup_proxy_set" -eq 1 ] || [ "$setup_local" -eq 1 ]; } && [ "$action" != setup ]; then
-    printf '%s\n' '--proxy and --local require setup.' >&2
+if { [ "$setup_proxy_set" -eq 1 ] || [ "$setup_local" -eq 1 ]; } && [ "$action" != --install ]; then
+    action_msg setup_flags >&2
     exit 2
 fi
 
-# Profile changes are a separate, explicit action. Reporting stays read-only.
-if [ "$action" = setup ]; then
+# Profile changes are explicit; reporting stays read-only.
+if [ "$action" = --install ]; then
     install_home=${HOME:-}
     case "$install_home" in
         /*) ;;
-        *) printf '%s\n' 'HOME must be set to an absolute directory for shell setup.' >&2; exit 1 ;;
+        *) action_msg home_setup >&2; exit 1 ;;
     esac
     if [ "$setup_local" -eq 1 ] && [ "$setup_proxy_set" -eq 1 ]; then
-        printf '%s\n' '--proxy cannot be combined with --local.' >&2
+        action_msg proxy_local >&2
         exit 2
     fi
     case "$setup_proxy" in
         ''|http://?*|https://?*) ;;
-        *) printf '%s\n' 'Use an http:// or https:// proxy URL for curl/wget.' >&2; exit 2 ;;
+        *) action_msg bad_proxy >&2; exit 2 ;;
     esac
-    for tool in awk cat mktemp cp cmp mv rm; do
+    for tool in awk cat mkdir mktemp cp cmp mv rm; do
         if ! command -v "$tool" >/dev/null 2>&1; then
-            printf 'Required shell setup command missing: %s\n' "$tool" >&2
+            action_msg missing_setup_tool "$tool" >&2
             exit 1
         fi
     done
@@ -130,17 +199,19 @@ if [ "$action" = setup ]; then
         setup_local_target=$(setup_quote "$setup_arg") || exit 1
     else
         if command -v curl >/dev/null 2>&1; then
+            setup_downloader=curl
             set -- curl -fsSL --connect-timeout 2 --max-time 5
             if [ -n "$setup_proxy" ]; then set -- "$@" --proxy "$setup_proxy"; fi
         elif command -v wget >/dev/null 2>&1; then
+            setup_downloader=wget
             case "$setup_proxy" in
-                https://*) printf '%s\n' 'An https:// proxy requires curl; install curl or use an http:// proxy.' >&2; exit 1 ;;
+                https://*) action_msg https_wget >&2; exit 1 ;;
             esac
             set -- wget -qO- -T5
             setup_wget_help=$(wget --help 2>&1) || :
             case "$setup_wget_help" in *--tries*) set -- "$@" -t1 ;; esac
         else
-            printf '%s\n' 'sysinfo: install curl or wget, then run sh sysinfo.sh setup again.' >&2
+            action_msg no_downloader >&2
             exit 1
         fi
         set -- "$@" https://raw.githubusercontent.com/nordz0r/sysinfo/master/sysinfo.sh
@@ -152,9 +223,10 @@ if [ "$action" = setup ]; then
             setup_fetch=$setup_proxy_assignment$setup_fetch
         fi
     fi
+    if ! mkdir -p "$install_home"; then action_msg mkdir_failed "$install_home" >&2; exit 1; fi
     setup_backup=$setup_profile.sysinfo.bak
     if [ -L "$setup_profile" ] || { [ -e "$setup_profile" ] && [ ! -f "$setup_profile" ]; }; then
-        printf 'Refusing to modify a symlink or non-regular file: %s\n' "$setup_profile" >&2
+        action_msg unsafe_profile "$setup_profile" >&2
         exit 1
     fi
     setup_tmp=$(mktemp "$install_home/.sysinfo-profile.XXXXXX") || exit 1
@@ -244,8 +316,42 @@ SYSINFO_LEGACY_BASHRC
             if (!last_blank) print ""
         }
     ' "$setup_input" > "$setup_tmp"; then
-        printf '%s\n' 'Could not safely migrate existing sysinfo entries; shell profile was left unchanged.' >&2
+        action_msg migrate_failed >&2
         exit 1
+    fi
+    if [ "$setup_local" -eq 1 ]; then
+        install_dir=$install_home/.local/bin
+        install_target=$install_dir/sysinfo.sh
+        if [ -L "$install_target" ] || { [ -e "$install_target" ] && [ ! -f "$install_target" ]; }; then
+            action_msg unsafe_target "$install_target" >&2
+            exit 1
+        fi
+        if [ -e "$install_target" ]; then
+            { IFS= read -r install_first; IFS= read -r install_marker; } < "$install_target"
+            if [ "$install_first" != '#!/bin/sh' ] || [ "$install_marker" != '# sysinfo-managed-install: 1' ]; then
+                action_msg unmanaged "$install_target" >&2
+                exit 1
+            fi
+        fi
+        for tool in mkdir mktemp chmod mv; do
+            command -v "$tool" >/dev/null 2>&1 || { action_msg missing_install_tool "$tool" >&2; exit 1; }
+        done
+        if ! mkdir -p "$install_dir"; then action_msg mkdir_failed "$install_dir" >&2; exit 1; fi
+        action_msg saving_current "$install_target"
+        install_tmp=$(mktemp "$install_dir/.sysinfo.XXXXXX") || exit 1
+        trap 'if [ -n "$install_tmp" ]; then rm -f "$install_tmp"; fi; if [ -n "$setup_tmp" ]; then rm -f "$setup_tmp"; fi' 0
+        if ! {
+            printf '%s\n' '#!/bin/sh' '# sysinfo-managed-install: 1' \
+                '# --install configures a fresh remote startup download; add --local to save a managed copy too.' \
+                "sysinfo_payload=\$(cat <<'SYSINFO_PAYLOAD'"
+            printf '%s\n' "$sysinfo_payload"
+            printf '%s\n' 'SYSINFO_PAYLOAD' ') || exit 1' 'eval "$sysinfo_payload"'
+        } > "$install_tmp" || ! chmod 755 "$install_tmp" || ! mv -f "$install_tmp" "$install_target"; then
+            action_msg install_failed "$install_target" >&2
+            exit 1
+        fi
+        install_tmp=
+        action_msg installed "$install_target"
     fi
     if ! {
         printf '%s\n' '# >>> sysinfo >>>' \
@@ -258,101 +364,98 @@ SYSINFO_LEGACY_BASHRC
         fi
         printf '%s\n' '# <<< sysinfo <<<'
     } >> "$setup_tmp"; then
-        printf '%s\n' 'Could not write the shell startup block.' >&2
+        action_msg block_failed >&2
         exit 1
     fi
     if ! awk '/^# >>> sysinfo >>>$/{inside=1} inside{print} /^# <<< sysinfo <<<$/{exit}' "$setup_tmp" | sh -n; then
-        printf '%s\n' 'Shell startup syntax validation failed; profile was left unchanged.' >&2
+        action_msg syntax_failed >&2
         exit 1
     fi
+    if [ "$setup_local" -eq 1 ]; then
+        action_msg setup_local
+        printf '%s\n' "$setup_arg"
+    else
+        action_msg setup_remote "$setup_downloader"
+        printf '%s\n' 'https://raw.githubusercontent.com/nordz0r/sysinfo/master/sysinfo.sh'
+    fi
     if [ -f "$setup_profile" ] && cmp -s "$setup_tmp" "$setup_profile"; then
-        printf 'Shell startup already configured: %s\n' "$setup_profile"
+        action_msg setup_same "$setup_profile"
         exit 0
     fi
     if [ -f "$setup_profile" ] && [ ! -e "$setup_backup" ] && [ ! -L "$setup_backup" ]; then
         cp -p "$setup_profile" "$setup_backup" || exit 1
-        printf 'Backup: %s\n' "$setup_backup"
+        action_msg backup "$setup_backup"
     fi
     mv -f "$setup_tmp" "$setup_profile" || exit 1
     setup_tmp=
-    printf 'Configured shell startup: %s\n' "$setup_profile"
+    action_msg setup_done "$setup_profile"
     exit 0
 fi
 
-# Installation is explicit. Neither reporting nor uninstall creates directories.
-if [ "$action" != report ]; then
+if [ "$action" = --uninstall ]; then
     install_home=${HOME:-}
-    case "$install_home" in
-        /*) ;;
-        *) printf '%s\n' 'HOME must be set to an absolute directory for installation.' >&2; exit 1 ;;
-    esac
-    install_dir=$install_home/.local/bin
-    install_target=$install_dir/sysinfo.sh
+    case "$install_home" in /*) ;; *) action_msg home_install >&2; exit 1 ;; esac
+    setup_shell=${SHELL##*/}
+    if [ "$setup_shell" = bash ]; then setup_profile=$install_home/.bashrc; else setup_profile=$install_home/.profile; fi
+    setup_backup=$setup_profile.sysinfo.bak
+    install_target=$install_home/.local/bin/sysinfo.sh
     if [ -L "$install_target" ] || { [ -e "$install_target" ] && [ ! -f "$install_target" ]; }; then
-        printf 'Refusing to modify a symlink or non-regular file: %s\n' "$install_target" >&2
+        action_msg unsafe_target "$install_target" >&2
         exit 1
     fi
     if [ -e "$install_target" ]; then
-        # Do not overwrite or remove an unrelated user file at the same path.
-        {
-            IFS= read -r install_first
-            IFS= read -r install_marker
-        } < "$install_target"
+        { IFS= read -r install_first; IFS= read -r install_marker; } < "$install_target"
         if [ "$install_first" != '#!/bin/sh' ] || [ "$install_marker" != '# sysinfo-managed-install: 1' ]; then
-            printf 'Refusing to modify an unmanaged file: %s\n' "$install_target" >&2
+            action_msg unmanaged "$install_target" >&2
             exit 1
         fi
     fi
-    if [ "$action" = --uninstall ]; then
-        if [ ! -e "$install_target" ]; then
-            printf 'Not installed: %s\n' "$install_target"
-            exit 0
-        fi
-        if ! rm "$install_target"; then
-            printf 'Could not remove: %s\n' "$install_target" >&2
+    if [ -L "$setup_profile" ] || { [ -e "$setup_profile" ] && [ ! -f "$setup_profile" ]; }; then
+        action_msg unsafe_profile "$setup_profile" >&2
+        exit 1
+    fi
+    if [ -f "$setup_profile" ]; then
+        for tool in awk cmp mv mktemp rm; do command -v "$tool" >/dev/null 2>&1 || { action_msg missing_setup_tool "$tool" >&2; exit 1; }; done
+        setup_tmp=$(mktemp "$install_home/.sysinfo-uninstall.XXXXXX") || exit 1
+        trap 'if [ -n "$setup_tmp" ]; then rm -f "$setup_tmp"; fi' 0
+        if ! SYSINFO_BACKUP="$setup_profile.sysinfo.bak" awk '
+            BEGIN {
+                backup = ENVIRON["SYSINFO_BACKUP"]
+                if (backup != "") {
+                    while ((getline saved < backup) > 0) saved_last = saved
+                    close(backup)
+                }
+            }
+            /^# >>> sysinfo >>>$/ {
+                if (inside) exit 2
+                if (pending_blank && saved_last == "") print ""
+                pending_blank = 0; inside=1; next
+            }
+            /^# <<< sysinfo <<<$/{ if (!inside) exit 2; inside=0; next }
+            !inside && $0 ~ /^[[:space:]]*(curl|wget)[[:space:]].*https:[/][/]raw[.]githubusercontent[.]com[/]nordz0r[/]sysinfo[/]master[/]sysinfo(_v2)?[.]sh.*[|][[:space:]]*(sh|bash)([[:space:]]|$)/ { next }
+            !inside && $0 ~ /^[[:space:]]*(sh[[:space:]]+|bash[[:space:]]+)?(["\047])?([~]|\$HOME|\$[{]HOME[}])[.]local[/]bin[/]sysinfo[.]sh(["\047])?([[:space:]]+--interactive-only)?[[:space:]]*$/ { next }
+            !inside && $0 == "" { if (pending_blank) print ""; pending_blank=1; next }
+            !inside { if (pending_blank) print ""; pending_blank=0; print }
+            END { if (inside) exit 2; if (pending_blank) print "" }
+        ' "$setup_profile" > "$setup_tmp"; then
+            action_msg migrate_failed >&2
             exit 1
         fi
-        printf 'Uninstalled: %s\n' "$install_target"
-        exit 0
-    fi
-    for tool in mkdir mktemp chmod mv rm; do
-        if ! command -v "$tool" >/dev/null 2>&1; then
-            printf 'Required installation command missing: %s\n' "$tool" >&2
-            exit 1
+        if ! cmp -s "$setup_tmp" "$setup_profile"; then
+            if [ ! -e "$setup_profile.sysinfo.bak" ] && [ ! -L "$setup_profile.sysinfo.bak" ]; then cp -p "$setup_profile" "$setup_profile.sysinfo.bak" || exit 1; fi
+            mv -f "$setup_tmp" "$setup_profile" || { action_msg remove_failed "$setup_profile" >&2; exit 1; }
+            setup_tmp=
+            action_msg removed "$setup_profile"
         fi
-    done
-    if ! mkdir -p "$install_dir"; then
-        printf 'Could not create installation directory: %s\n' "$install_dir" >&2
-        exit 1
     fi
-    install_tmp=$(mktemp "$install_dir/.sysinfo.XXXXXX") || exit 1
-    trap 'if [ -n "$install_tmp" ]; then rm -f "$install_tmp"; fi' 0
-    trap 'exit 1' HUP INT TERM
-    # Recreate the self-contained entry point from its in-memory source. This
-    # also works when a shell received the script through a pipe: no HTTP retry.
-    if ! {
-        printf '%s\n' '#!/bin/sh' '# sysinfo-managed-install: 1' \
-            '# Run immediately; save a copy only with --install.' \
-            "sysinfo_payload=\$(cat <<'SYSINFO_PAYLOAD'"
-        printf '%s\n' "$sysinfo_payload"
-        # Preserve the variable reference for the installed script itself.
-        # shellcheck disable=SC2016
-        printf '%s\n' 'SYSINFO_PAYLOAD' ') || exit 1' 'eval "$sysinfo_payload"'
-    } > "$install_tmp"; then
-        printf '%s\n' 'Could not write the installed script.' >&2
-        exit 1
+    if [ -e "$install_target" ]; then
+        rm "$install_target" || { action_msg remove_failed "$install_target" >&2; exit 1; }
+        action_msg removed "$install_target"
+    else
+        action_msg not_installed "$install_target"
     fi
-    if ! chmod 755 "$install_tmp" || ! mv -f "$install_tmp" "$install_target"; then
-        printf 'Could not install: %s\n' "$install_target" >&2
-        exit 1
-    fi
-    install_tmp=
-    printf 'Installed: %s\n' "$install_target"
     exit 0
 fi
-
-# The parent shell checks its interactive flag in the .bashrc hook. A script
-# itself runs in a non-interactive child shell, so check terminal descriptors.
 if [ "$interactive_only" -eq 1 ] && { [ ! -t 0 ] || [ ! -t 1 ]; }; then
     exit 0
 fi
