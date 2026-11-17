@@ -28,139 +28,145 @@ usage, and IP addresses. Terminal labels stay in English across servers and rout
 - **Compact output:** up to four filesystems and three interfaces by default; OpenWrt shows all active IPv4 interfaces.
 - **Optional installation:** run immediately without flags; save a local copy only with `--install`.
 
-**Contents:** [Quick start](#quick-start) · [Bash startup](#bash-startup) · [Options](#options) · [Compatibility](#compatibility) · [Development](#development)
+**Contents:** [Quick start](#quick-start) · [Shell startup](#shell-startup) · [Options](#options) · [Compatibility](#compatibility) · [Development](#development)
 
 ## Quick start
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/nordz0r/sysinfo/master/sysinfo.sh | bash
+```sh
+curl -fsSL https://raw.githubusercontent.com/nordz0r/sysinfo/master/sysinfo.sh | sh
 ```
 
 Or use `wget`:
 
 ```sh
-wget -qO- https://raw.githubusercontent.com/nordz0r/sysinfo/master/sysinfo.sh | sh
+wget -q -O - -T 5 https://raw.githubusercontent.com/nordz0r/sysinfo/master/sysinfo.sh | sh
 ```
 
-Use a trusted source and review the code before execution. The script prints
-current information and exits without installing a copy.
+Use a trusted source and review the code before execution. Piping is simple, but
+downloading to a file is safer if the download is incomplete.
 
-## Bash startup
+## Shell startup
 
-### Option A — GitHub, the default
+### Configure GitHub startup
 
-Run once. This configures `~/.bashrc`, replacing legacy sysinfo entries with
-one block containing a short description and repository link. No local script
-installation is needed.
+Install a copy at `~/.local/bin/sysinfo.sh`:
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/nordz0r/sysinfo/master/sysinfo.sh | bash -s -- --setup-bash
+```sh
+curl -fsSL https://raw.githubusercontent.com/nordz0r/sysinfo/master/sysinfo.sh | sh -s -- --install
 ```
 
-If only `wget` is available:
+Configure startup for the installed copy separately:
 
-```bash
-wget -qO- https://raw.githubusercontent.com/nordz0r/sysinfo/master/sysinfo.sh | bash -s -- --setup-bash
+```sh
+sh "$HOME/.local/bin/sysinfo.sh" setup --local
 ```
 
-Each interactive Bash startup fetches the current `sysinfo.sh` from GitHub
-and runs it from memory. Setup selects `curl`, or `wget` if curl is absent.
-If neither exists, setup suggests installing a downloader and leaves the
-profile unchanged.
+`SHELL` selects the profile: Bash uses `~/.bashrc`; all other values, including
+an unset `SHELL`, use `~/.profile`.
 
-The `.bashrc` entry contains a blank separator, comments, and one startup line
-with the URL and proxy options already filled in. Downloader detection and
-option selection happen during setup. If you remove the selected downloader,
-run `--setup-bash` again to select an available one.
+**OpenWrt:**
 
-Fetching starts only in interactive Bash with terminal stdin and stdout.
-The selected command pipes the script directly into `bash`, without an
-intermediate variable or saved file. The terminal check runs before the pipeline,
-so non-interactive `ssh host command`, `scp`, cron jobs, and redirected output
-stay free of the summary. `curl` has a total timeout of 5 seconds; `wget` uses
-a 5-second network timeout and one attempt when supported.
-Download errors do not interrupt Bash startup.
+```sh
+wget -q -O - -T 20 https://raw.githubusercontent.com/nordz0r/sysinfo/master/sysinfo.sh | sh -s -- --install
+```
+
+Then configure startup separately with `sh "$HOME/.local/bin/sysinfo.sh" setup --local`.
+The `wget` options are written separately for OpenWrt compatibility.
+
+#### Optional: run remotely without installing a local copy
+
+To configure remote startup, run:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/nordz0r/sysinfo/master/sysinfo.sh | sh -s -- setup
+```
+
+Setup detects `curl`, or `wget` if curl is absent. If neither downloader is
+available, it leaves the profile unchanged. The remote hook fetches the current
+script and pipes it to `sh` only in an interactive shell with terminal stdin and
+stdout. Commands such as `ssh host command`, `scp`, cron jobs, and redirected
+output do not print the summary; download failures do not interrupt startup. An
+incomplete download may execute a partial script; downloading to a file is safer.
+
+`~/.profile` is the standard POSIX login profile, but not every shell reads it.
+Startup hooks in that file are not universal for shells that do not read it or
+do not support POSIX shell hooks; configure the appropriate file manually for
+those shells.
 
 #### Using a proxy
 
-Specify the proxy for both the initial download and future startup downloads:
-replace `proxy.example.com:3128` with your proxy address.
+For the remote-startup option, set a proxy for the initial download and future
+fetches; replace `proxy.example.com:3128` with your proxy address.
 
-```bash
-sysinfo_proxy='http://proxy.example.com:3128'
-curl -fsSL --proxy "$sysinfo_proxy" https://raw.githubusercontent.com/nordz0r/sysinfo/master/sysinfo.sh | bash -s -- --setup-bash --proxy "$sysinfo_proxy"
+```sh
+sysinfo_proxy='http://proxy.example.com:3128'; curl -fsSL --proxy "$sysinfo_proxy" https://raw.githubusercontent.com/nordz0r/sysinfo/master/sysinfo.sh | sh -s -- setup --proxy "$sysinfo_proxy"
 ```
 
-The `--proxy` address is inserted into the selected downloader command.
-Pass it again when reconfiguring; without it, the hook uses normal
-proxy settings from the environment. Use an `http://` proxy for compatibility
-with both downloaders; an `https://` proxy requires `curl`.
-For the initial download with `wget`, set `https_proxy` and `http_proxy`:
+The `--proxy` address is saved in the selected downloader command. Pass it again
+when reconfiguring; without it, the hook uses normal proxy settings from the
+environment. Use an `http://` proxy for compatibility with both downloaders; an
+`https://` proxy requires curl. For the initial download with `wget`, set
+`https_proxy` and `http_proxy`:
 
-```bash
-sysinfo_proxy='http://proxy.example.com:3128'
-https_proxy="$sysinfo_proxy" http_proxy="$sysinfo_proxy" wget -qO- https://raw.githubusercontent.com/nordz0r/sysinfo/master/sysinfo.sh | bash -s -- --setup-bash --proxy "$sysinfo_proxy"
+```sh
+sysinfo_proxy='http://proxy.example.com:3128'; https_proxy="$sysinfo_proxy" http_proxy="$sysinfo_proxy" wget -q -O - -T 20 https://raw.githubusercontent.com/nordz0r/sysinfo/master/sysinfo.sh | sh -s -- setup --proxy "$sysinfo_proxy"
 ```
 
 #### Migrating legacy startup entries
 
-Setup removes old standalone `curl`/`wget` calls for this repository, including
-`sysinfo_v2.sh` and calls with proxy options, documented local hooks, and blocks
-from previous setup runs. A `# by NorD` comment immediately before a removed
-entry is removed too. Other settings are preserved. If the old call used a
-proxy, supply it with `--proxy`.
+To replace settings created by the former `--setup-bash` option, run `setup`
+again. It updates the startup file selected from `SHELL` and removes recognized
+sysinfo entries only from that file, including `sysinfo_v2.sh`, proxy variants,
+local calls, and previous managed blocks. Entries in another startup file are
+not changed. If an old call used a proxy, pass it again with `--proxy`; other
+settings in the selected profile are preserved.
 
-Before the first change, an existing profile is backed up to
-`~/.bashrc.sysinfo.bak`; later runs preserve this backup. Repeating setup does
-not add duplicates. Bash syntax is checked before replacing the profile.
-If an old call is part of a complex construct that cannot be replaced
-unambiguously, setup reports the issue and leaves the profile unchanged.
-A symlink at `.bashrc` is also left unchanged. To disable startup, remove the
-block from `# >>> sysinfo >>>` through `# <<< sysinfo <<<`, including both markers.
+Before the first change, the selected profile is backed up with the
+`.sysinfo.bak` suffix; an existing backup is never overwritten. Repeating setup
+does not add duplicates. A symlink at the profile path is left unchanged. To
+disable startup, remove the block from `# >>> sysinfo >>>` through
+`# <<< sysinfo <<<`, including both markers.
 
 <details>
-<summary><strong>Option B — local installation for offline use</strong></summary>
+<summary><strong>Offline use after installation</strong></summary>
 
-If GitHub is unavailable or a network request at login is unwanted, save a copy
-to `~/.local/bin/sysinfo.sh`:
+The primary command above installs `~/.local/bin/sysinfo.sh` and configures
+startup to run that local copy, so later logins do not need network access.
+To update an already installed copy from a checkout, run:
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/nordz0r/sysinfo/master/sysinfo.sh | bash -s -- --install
+```sh
+sh sysinfo.sh --install
 ```
 
-Directories are created as needed, and the file gets mode `755`.
-A managed copy is updated atomically; unrelated files and symlinks at the target
-are preserved. Installation does not edit the shell profile.
+Installation does not edit the profile. If you installed the local copy
+separately, configure its startup hook with:
 
-For local startup, configure the same block in offline mode
-(this replaces option A and legacy entries):
-
-```bash
-"$HOME/.local/bin/sysinfo.sh" --setup-bash --local
+```sh
+sh "$HOME/.local/bin/sysinfo.sh" setup --local
 ```
 
 Run or remove the installed copy:
 
 ```sh
-"$HOME/.local/bin/sysinfo.sh"
-"$HOME/.local/bin/sysinfo.sh" --uninstall
+sh "$HOME/.local/bin/sysinfo.sh"
+sh "$HOME/.local/bin/sysinfo.sh" --uninstall
 ```
 
 Removal deletes only the script. Directories and shell settings remain intact;
 the local startup line silently skips the missing executable.
-From a checkout, use `sh sysinfo.sh --install` or `sh sysinfo.sh --uninstall`.
 
 </details>
 
+
 ## Options
 
-| Flag | Behavior |
+| Command / option | Behavior |
 | --- | --- |
 | `--install` | Create or update `~/.local/bin/sysinfo.sh`. |
 | `--uninstall` | Remove the installed copy. |
-| `--setup-bash` | Configure GitHub startup in `~/.bashrc`, replacing legacy sysinfo entries. |
-| `--proxy URL` | Save an HTTP(S) proxy for `--setup-bash`. |
-| `--local` | With `--setup-bash`, run the installed local copy instead. |
+| `setup` | Configure startup in `~/.bashrc` for Bash or `~/.profile` for other shells, replacing legacy sysinfo entries. |
+| `--proxy URL` | Save an HTTP(S) proxy for startup configured with `setup`. |
+| `--local` | With `setup`, run the installed local copy instead. |
 | `--interactive-only` | Print only when stdin/stdout are attached to terminals. |
 | `--details` | Show all selected local filesystems and IPv4 interfaces. |
 | `--all-interfaces` | Show all IPv4 interfaces, including virtual ones. |
@@ -195,11 +201,12 @@ Separator lengths follow the output and terminal width (`COLUMNS`).
 Base requirements are `sh`, `cat`, `uname`, `awk`, and `df`. Installation also
 needs `mkdir`, `mktemp`, `chmod`, `mv`, and `rm`. Local execution needs neither
 `curl` nor `wget`; if both are absent, the script suggests installing a downloader.
-`--setup-bash` additionally needs Bash, `cp`, `cmp`, and `mktemp`.
+`setup` needs `cp`, `cmp`, and `mktemp`; Bash is not required.
 
-On OpenWrt, `/overlay` does not duplicate the root filesystem, `/tmp` is shown
-separately, and immutable squashfs images are skipped. Stock `ash` does not read
-`~/.bashrc`; put an equivalent `case $-` startup check in `~/.profile` instead.
+On OpenWrt, the automatic setup command above works with `wget`, `mktemp`, `rm`,
+and stock `ash` (`sh`). `/overlay` does not duplicate the root filesystem,
+`/tmp` is shown separately, and immutable squashfs images are skipped. Setup selects
+`~/.profile` when `SHELL` does not identify Bash.
 
 macOS behavior is covered by system-command fixtures; testing on a real Mac
 remains necessary. RAM derived from `vm_stat` estimates usage, not Activity
